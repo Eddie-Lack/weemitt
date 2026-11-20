@@ -1,0 +1,10 @@
+# A floor, and a death pad from x = 200 to 600 (make_scenes.py). The level's enemies, garibs and potions
+# are switched off. The ball drops on the pad at frame 200 and bursts; the glove restarts.
+options off 3
+tri -600 0 -600  -600 0 600  200 0 600  0
+tri -600 0 -600  200 0 600  200 0 -600  0
+tri 200 0 -600  200 0 600  600 0 600  6
+tri 200 0 -600  600 0 600  600 0 -600  6
+respawn 0 -300 20 -300 0
+place 0 hand 0 40 0 ball 0 40 60 yaw 0 camera
+place 200 ball 400 40 0

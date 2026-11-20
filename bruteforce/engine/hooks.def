@@ -1,0 +1,64 @@
+/* The game's functions that the engine hooks (engine/hooks.c). The Makefile links the game with --wrap for each,
+   and reads the names from this file. HOOK0: no argument. HOOK1: one pointer argument.
+
+   HOOKA(name, (parameters), (arguments)): other arguments, which the hook passes on and does not record.
+
+   These are the functions that MainGameLoop calls, in its order, and the ones that the game thread's frame calls
+   around it, plus a few that update one object. All are called from another source file of the game: --wrap only
+   reaches such calls.
+
+   OFF0: a function of weemitt's PC additions that the engine turns off. Its wrap returns 0 and does not call it.
+
+   DRAW0: the draw (GraphicsStep). The hook marks the time inside it.
+   SKIP0(name, (parameters), (arguments)) and SKIPP(...): functions of the draw that only build the picture: display
+   lists, vertices, matrices for the graphics chip. In a trimmed draw (engine_trim_draw) their wraps return at once
+   (SKIPP with a null pointer). Called from outside the draw, they always run. docs/engine.md, "The trimmed draw",
+   lists the evidence that they change nothing the game's logic reads. */
+OFF0(CheatMenuAvailable)
+DRAW0(GraphicsStep)
+SKIP0(guMtxF2L, (float mf[4][4], void *m), (mf, m))
+SKIP0(WriteObjectDisplayListFlat, (void *obj), (obj))
+SKIP0(WriteObjectDisplayListGouraud, (void *obj), (obj))
+SKIP0(DeformTextureCoords, (void *obj), (obj))
+SKIPP(spDraw, (void *sp), (sp))
+SKIP0(SetupViewing, (void), ())
+SKIP0(InitDisplayLists, (void), ())
+SKIP0(ApplyGlobalTransformations, (void), ())
+SKIP0(ProcessBackgroundLights, (void *actor), (actor))
+SKIP0(LoadTexture, (void *tex), (tex))
+HOOK1(StartDrawing)
+HOOK0(UpdateAmbientSounds)
+HOOK0(UpdateCheatText)
+HOOK0(HandleScreenDebris)
+HOOK0(CycleTextures)
+HOOK0(RestartPlayer)
+HOOK0(ProcessCollectables)
+HOOK0(UpdateWater)
+HOOK0(UpdateSpikes)
+HOOK0(UpdateDebris)
+HOOK0(CheckPuzzles)
+HOOK0(UpdateWinds)
+HOOK0(UpdatePlatforms)
+HOOK0(UpdateBuzzers)
+HOOK0(UpdateTips)
+HOOK0(UpdateEnemies)
+HOOK0(UpdateFootprints)
+HOOK1(UpdateActor)
+HOOK1(NMEProcessActorScript)
+HOOK0(UpdateBullets)
+HOOK0(ProcessInput)
+HOOK0(UpdateActorPositionDependencies)
+HOOK0(MoveBall)
+HOOK0(MoveHand)
+HOOK0(MoveCam)
+HOOK0(PlayerSpinCamera)
+HOOK0(CalculateShadows)
+HOOK0(UpdateLights)
+HOOK0(UpdateVents)
+HOOK0(DoEarthquake)
+HOOK0(UpdateBlurs)
+HOOK0(DoBoss)
+HOOK0(UpdateCameos)
+HOOK0(ProcessPersonalLoop)
+HOOK0(CheckForExits)
+HOOKA(AddPuff, (void *pos, void *vel, float scale), (pos, vel, scale))

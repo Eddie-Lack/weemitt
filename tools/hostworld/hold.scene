@@ -1,0 +1,8 @@
+# The glove holds the ball (it falls into the glove at the start). A place of the glove alone, then of the ball
+# alone, moves the two together. A place of both apart makes the glove let go.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+place 0 hand 0 40 0 ball 0 70 0 yaw 0 camera
+place 200 hand 300 40 0
+place 300 ball -300 40 0
+place 400 hand 0 40 300 ball 300 40 300

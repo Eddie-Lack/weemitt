@@ -1,0 +1,11 @@
+# A ledge from x = -2300 to -1700 at height 0, and a pit from x = -1700 to -900 whose floor, 1500 below,
+# is a void (make_scenes.py). The ball drops into the pit at frame 100 and the glove at frame 300. The
+# host places both back on the ledge at frame 500.
+tri -2300 0 -400  -2300 0 400  -1700 0 400  0
+tri -2300 0 -400  -1700 0 400  -1700 0 -400  0
+tri -1700 -1500 -400  -1700 -1500 400  -900 -1500 400  0 2
+tri -1700 -1500 -400  -900 -1500 400  -900 -1500 -400  0 2
+place 0 hand -2000 40 0 ball -2100 40 0 yaw 0 camera
+place 100 ball -1300 40 0
+place 300 hand -1300 40 100
+place 500 hand -2000 40 0 ball -2100 40 0 camera

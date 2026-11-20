@@ -1,0 +1,39 @@
+# A slider at x = -200 that moves 60 units to each side along z, once every 400 original frames, with a
+# conveyor of 0.3 along x; the ball rests on it. A turntable at x = 200 that turns once every 400
+# frames, with a conveyor of 0.3 along its own x; the glove stands on it (make_scenes.py).
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+body 1 -200 40 0  0 0 0 1  1 1 1
+tri -40 -5 -40  -40 -5 40  -40 5 40  0
+tri -40 -5 -40  -40 5 40  -40 5 -40  0
+tri 40 -5 -40  40 5 -40  40 5 40  0
+tri 40 -5 -40  40 5 40  40 -5 40  0
+tri -40 -5 -40  40 -5 -40  40 -5 40  0
+tri -40 -5 -40  40 -5 40  -40 -5 40  0
+tri -40 5 -40  -40 5 40  40 5 40  0
+tri -40 5 -40  40 5 40  40 5 -40  0
+tri -40 -5 -40  -40 5 -40  40 5 -40  0
+tri -40 -5 -40  40 5 -40  40 -5 -40  0
+tri -40 -5 40  40 -5 40  40 5 40  0
+tri -40 -5 40  40 5 40  -40 5 40  0
+end
+body 2 200 40 0  0 0 0 1  1 1 1
+tri -40 -5 -40  -40 -5 40  -40 5 40  0
+tri -40 -5 -40  -40 5 40  -40 5 -40  0
+tri 40 -5 -40  40 5 -40  40 5 40  0
+tri 40 -5 -40  40 5 40  40 -5 40  0
+tri -40 -5 -40  40 -5 -40  40 -5 40  0
+tri -40 -5 -40  40 -5 40  -40 -5 40  0
+tri -40 5 -40  -40 5 40  40 5 40  0
+tri -40 5 -40  40 5 40  40 5 -40  0
+tri -40 -5 -40  -40 5 -40  40 5 -40  0
+tri -40 -5 -40  40 5 -40  40 -5 -40  0
+tri -40 -5 40  40 -5 40  40 5 40  0
+tri -40 -5 40  40 5 40  -40 5 40  0
+end
+move 1 sine 400 0 0 60
+move 2 spin 400
+bodyconveyor 0 1 0.3 0 0
+bodyconveyor 0 2 0.3 0 0
+place 0 hand 0 13 -300 ball 0 9 -400 yaw 0 camera
+place 100 hand 200 60 0 ball -215 60 60

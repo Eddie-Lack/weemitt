@@ -1,0 +1,18 @@
+# Pads of terrain 0, 8, 12, 9 and 6, centred at x = 0, 500, 1000, 1500 and 2000 (make_scenes.py).
+# The ball rolls along +z on the first three, from z = -150 at 8 units a frame. The glove then stands
+# on the hurting pad, and the ball drops on the death pad.
+tri -200 0 -400  -200 0 1000  200 0 1000  0
+tri -200 0 -400  200 0 1000  200 0 -400  0
+tri 300 0 -400  300 0 1000  700 0 1000  8
+tri 300 0 -400  700 0 1000  700 0 -400  8
+tri 800 0 -400  800 0 1000  1200 0 1000  12
+tri 800 0 -400  1200 0 1000  1200 0 -400  12
+tri 1300 0 -400  1300 0 1000  1700 0 1000  9
+tri 1300 0 -400  1700 0 1000  1700 0 -400  9
+tri 1800 0 -400  1800 0 1000  2200 0 1000  6
+tri 1800 0 -400  2200 0 1000  2200 0 -400  6
+place 0 hand 100 40 -300 ball 0 40 -150 ballvel 0 0 8 camera
+place 200 ball 500 40 -150 ballvel 0 0 8
+place 400 ball 1000 40 -150 ballvel 0 0 8
+place 600 hand 1500 40 0 ball 1000 40 -300 camera
+place 700 hand 100 40 -300 ball 2000 40 0 camera

@@ -1,0 +1,15 @@
+# Build output
+/build/
+/deps/
+# Generator scratch: ram.log lists ROM pointer values, types.json is rebuilt by gen_types.py
+/gen/types.json
+/gen/ram.log
+# Never commit a ROM, a save file or a savestate
+*.z64
+*.n64
+*.v64
+*.bin
+*.st
+*.pj
+__pycache__/
+/bruteforce/build/

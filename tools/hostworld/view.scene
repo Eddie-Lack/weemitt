@@ -1,0 +1,6 @@
+# The flat floor and a host camera that draws (flag 1) from above and to the side of the glove. It changes the
+# picture only: the glove and the ball move as without it.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+place 0 hand 0 40 0 ball 0 40 60 yaw 0 camera
+view 0 1  250 200 -250  0 10 0  0 1 0  50 1.7777778 10 4000

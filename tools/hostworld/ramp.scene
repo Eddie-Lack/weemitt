@@ -1,0 +1,7 @@
+# A floor, and a ramp that rises from z = 100 (height 0) to z = 200 (height 60). The ball starts above the ramp
+# and rolls down it.
+tri -300 0 -300  -300 0 300  300 0 300  0
+tri -300 0 -300  300 0 300  300 0 -300  0
+tri -50 0 100  -50 60 200  50 60 200  0
+tri -50 0 100  50 60 200  50 0 100  0
+place 0 hand -150 30 -100 ball 0 80 170 camera

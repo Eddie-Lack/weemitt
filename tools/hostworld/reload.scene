@@ -1,0 +1,6 @@
+# The flat floor, then a start of the same level at frame 300. The level's reload frees the game's heap: the host
+# world is built again once the glove is ready, and the glove and the ball land on it again.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+place 0 hand 0 40 0 ball 0 40 60 yaw 0 camera
+goto 300 12

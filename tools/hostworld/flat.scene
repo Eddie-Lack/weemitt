@@ -1,0 +1,4 @@
+# A flat floor at height 0, 1200 units square, in two triangles. The glove and the ball fall onto it.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+place 0 hand 0 40 0 ball 0 40 60 yaw 0 camera

@@ -1,0 +1,21 @@
+# The slider, removed at frame 300 while the glove stands on it (make_scenes.py). The glove drops to the
+# floor.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+body 1 0 40 0  0 0 0 1  1 1 1
+tri -40 -5 -40  -40 -5 40  -40 5 40  0
+tri -40 -5 -40  -40 5 40  -40 5 -40  0
+tri 40 -5 -40  40 5 -40  40 5 40  0
+tri 40 -5 -40  40 5 40  40 -5 40  0
+tri -40 -5 -40  40 -5 -40  40 -5 40  0
+tri -40 -5 -40  40 -5 40  -40 -5 40  0
+tri -40 5 -40  -40 5 40  40 5 40  0
+tri -40 5 -40  40 5 40  40 5 -40  0
+tri -40 -5 -40  -40 5 -40  40 5 -40  0
+tri -40 -5 -40  40 5 -40  40 -5 -40  0
+tri -40 -5 40  40 -5 40  40 5 40  0
+tri -40 -5 40  40 5 40  -40 5 40  0
+end
+move 1 sine 160 120 0 0
+place 0 hand 0 60 0 ball 0 30 150 yaw 0 camera
+remove 300 1

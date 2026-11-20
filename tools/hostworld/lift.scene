@@ -1,0 +1,20 @@
+# A floor and a lift: a box 80 x 10 x 80 whose top rises and falls 30 units around height 45, once every
+# 120 original frames (make_scenes.py). The glove stands on it.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+body 1 0 40 0  0 0 0 1  1 1 1
+tri -40 -5 -40  -40 -5 40  -40 5 40  0
+tri -40 -5 -40  -40 5 40  -40 5 -40  0
+tri 40 -5 -40  40 5 -40  40 5 40  0
+tri 40 -5 -40  40 5 40  40 -5 40  0
+tri -40 -5 -40  40 -5 -40  40 -5 40  0
+tri -40 -5 -40  40 -5 40  -40 -5 40  0
+tri -40 5 -40  -40 5 40  40 5 40  0
+tri -40 5 -40  40 5 40  40 5 -40  0
+tri -40 -5 -40  -40 5 -40  40 5 -40  0
+tri -40 -5 -40  40 5 -40  40 -5 -40  0
+tri -40 -5 40  40 -5 40  40 5 40  0
+tri -40 -5 40  40 5 40  -40 5 40  0
+end
+move 1 sine 120 0 30 0
+place 0 hand 0 60 0 ball 150 30 0 yaw 0 camera

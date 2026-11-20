@@ -1,0 +1,5 @@
+# A floor at -300, below level 12's water near x = 700, whose surface is at about -15. The level's water boxes leave
+# the game with its landscape: the ball falls to the floor and rests at -291. With them it floats.
+tri -1000 -300 -600  -1000 -300 600  1000 -300 600  0
+tri -1000 -300 -600  1000 -300 600  1000 -300 -600  0
+place 0 hand 0 -260 0 ball 700 40 0 yaw 0 camera

@@ -1,0 +1,10 @@
+# A respawn, then a start of the same level at frame 300. The respawn goes in again after the reload: when the ball
+# bursts on the terrain 6 pad (x above 200), the glove restarts at the respawn.
+tri -600 0 -600  -600 0 600  200 0 600  0
+tri -600 0 -600  200 0 600  200 0 -600  0
+tri 200 0 -600  200 0 600  600 0 600  6
+tri 200 0 -600  600 0 600  600 0 -600  6
+place 0 hand 0 40 0 ball 0 40 60 yaw 0 camera
+respawn 0 -300 20 -300 0
+goto 300 12
+place 500 hand 0 40 0 ball 400 40 0 yaw 0

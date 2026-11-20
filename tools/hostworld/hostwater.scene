@@ -1,0 +1,8 @@
+# A floor at -200 under a host water from -600 to 600 in x and z, with its surface at -20
+# (make_scenes.py). The glove is placed in the water; the ball drops onto it and floats. The water goes at
+# frame 400: the ball sinks to the floor.
+tri -600 -200 -600  -600 -200 600  600 -200 600  0
+tri -600 -200 -600  600 -200 600  600 -200 -600  0
+water -600 -200 -600  1200 180 1200  -20
+place 0 hand 0 -100 0 ball 200 40 0 yaw 0 camera
+water 400 off

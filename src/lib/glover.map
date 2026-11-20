@@ -1,0 +1,5 @@
+/* The symbols that libglover.so exports: the functions of glover.h. The game's own symbols stay inside. */
+{
+    global: glover_*;
+    local: *;
+};

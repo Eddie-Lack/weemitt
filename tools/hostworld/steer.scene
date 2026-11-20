@@ -1,0 +1,6 @@
+# The flat floor and a host camera behind the glove, looking along +x. The camera steers (flag 2): with the stick
+# pushed up the glove walks along +x. The test's input pushes the stick up from frame 150.
+tri -600 0 -600  -600 0 600  600 0 600  0
+tri -600 0 -600  600 0 600  600 0 -600  0
+place 0 hand -300 40 0 ball -300 40 300 yaw 0 camera
+view 0 2  -500 80 0  -300 10 0  0 1 0  45 1.3333333 10 5000

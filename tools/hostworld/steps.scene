@@ -1,0 +1,23 @@
+# A floor, three steps of 8 units each and a wall of 100 units across the far side. The glove walks into them
+# (the test's input pushes the stick forward).
+tri -300 0 -300  -300 0 300  300 0 300  0
+tri -300 0 -300  300 0 300  300 0 -300  0
+# Step 1, its riser and its top.
+tri -60 0 60  -60 8 60  60 8 60  0
+tri -60 0 60  60 8 60  60 0 60  0
+tri -60 8 60  -60 8 300  60 8 300  0
+tri -60 8 60  60 8 300  60 8 60  0
+# Step 2.
+tri -60 8 100  -60 16 100  60 16 100  0
+tri -60 8 100  60 16 100  60 8 100  0
+tri -60 16 100  -60 16 300  60 16 300  0
+tri -60 16 100  60 16 300  60 16 100  0
+# Step 3.
+tri -60 16 140  -60 24 140  60 24 140  0
+tri -60 16 140  60 24 140  60 16 140  0
+tri -60 24 140  -60 24 300  60 24 300  0
+tri -60 24 140  60 24 300  60 24 140  0
+# The wall, facing -z.
+tri -300 0 250  -300 100 250  300 100 250  0
+tri -300 0 250  300 100 250  300 0 250  0
+place 0 hand 0 30 0 ball -100 30 -50 yaw 0 camera
