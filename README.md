@@ -1,7 +1,6 @@
 # weemitt
 
-A native PC port of the N64 game Glover (USA), built from the C of the matching decompilation
-[gloveworld](https://github.com/Eddie-Lack/gloveworld). You need your own copy of the ROM to play.
+A native PC port of the N64 game Glover (USA), built from the C of the matching decompilation [gloveworld](https://github.com/Eddie-Lack/gloveworld). No game code is included, you must use your own copy of the Glover ROM
 
 ## Building
 
