@@ -564,7 +564,9 @@ void NMEProcessDroid(Enemy *enemy) {
                 SineWave(enemy->brain.bobPeriod, FrameLag(), frameCount) * enemy->brain.bobAmount * 0.5 * deltaTime;
         }
         tempVect.y = hand.pos.y + 15.0f;
-        if ((*(Actor **)enemy->brain.normalList)->flags & 8) {
+        /* The first instruction's pointer, read as an actor's (as on the N64). On the 64-bit builds the stored pointer
+           is 32 bits wide, so it goes through the PTR32 entry, not a cast of the array. */
+        if (((Actor *)(NMEInstruction *)enemy->brain.normalList[0])->flags & 8) {
             tempVect.x = hand.pos.x;
             tempVect.z = enemy->brain.target.z;
         } else {
