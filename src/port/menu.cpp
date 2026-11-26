@@ -1007,7 +1007,9 @@ void studio_search_window() {
     if (si.message[0]) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", si.message);
     }
-    if (si.baseFrame >= 0) {
+    if (!si.folder[0]) {
+        /* No search yet. */
+    } else if (si.baseFrame >= 0) {
         ImGui::Text("Your route: the end at frame %ld%s", si.baseFrame, si.baseLoads ? " (with loads)" : "");
     } else if (si.baseFrame == -1) {
         ImGui::TextDisabled("Your route does not reach the end point.");
@@ -1022,7 +1024,9 @@ void studio_search_window() {
                 ImGui::Text("after %d load%s (%ld with the loads)", si.bestLoads, si.bestLoads == 1 ? "" : "s",
                             bestCost);
             }
-            if (si.baseFrame >= 0) {
+            if (!si.folder[0]) {
+        /* No search yet. */
+    } else if (si.baseFrame >= 0) {
                 long baseCost = si.baseFrame + (long)si.baseLoads * STUDIO_LOAD_FRAMES;
 
                 ImGui::Text("Gain: %ld frames with the loads", baseCost - bestCost);

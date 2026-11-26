@@ -1031,7 +1031,7 @@ static int searchProc = -1;
 static long searchStart;   /* the start frame of the latest search */
 static long searchWindow;  /* the frames of its window */
 static Uint32 lastPoll;
-static StudioSearchInfo search;
+static StudioSearchInfo search = {.bestFrame = -1, .firstFrame = -1, .baseFrame = -2, .takenFrame = -1};
 static EngineInput *best;  /* the best inputs of the window */
 static long bestLength;
 /* The timeline before the first studio_take_result of the latest search. It stays until the player plays on,
@@ -1056,9 +1056,10 @@ void studio_set_rom_path(const char *path) {
         snprintf(romPath, sizeof(romPath), "%s", path);
     }
 #else
-    if (realpath(path, romPath) == NULL) {
-        snprintf(romPath, sizeof(romPath), "%s", path);
-    }
+    char *full = realpath(path, NULL);
+
+    snprintf(romPath, sizeof(romPath), "%s", full != NULL ? full : path);
+    free(full);
 #endif
 }
 
@@ -1428,9 +1429,18 @@ static void poll_progress(void) {
                 end--;
             }
             *end = 0;
-            start = end;
-            while (start > text && start[-1] != '\n' && start[-1] != '\r') {
-                start--;
+            /* The last line that says why: not the summary line, not a progress line. */
+            for (;;) {
+                start = end;
+                while (start > text && start[-1] != '\n' && start[-1] != '\r') {
+                    start--;
+                }
+                if (start == text || (strstr(start, "ended without a result") == NULL && strstr(start, " tries (") == NULL
+                                      && start[0] != 0)) {
+                    break;
+                }
+                end = start - 1;
+                *end = 0;
             }
             snprintf(search.message, sizeof(search.message), "The search ended without a result: %s",
                      start[0] ? start : "(search.log is empty)");
@@ -1769,6 +1779,7 @@ int studio_load_route(const char *name, char *err, int errSize) {
     size_t size;
     char *text;
     char *line;
+    char *next;
     EngineInput *in = NULL;
     long count = 0;
     long cap = 0;
@@ -1789,7 +1800,16 @@ int studio_load_route(const char *name, char *err, int errSize) {
         free(text);
         return -1;
     }
-    for (line = strtok(text, "\r\n"); line != NULL; line = strtok(NULL, "\r\n")) {
+    /* Line by line by hand: input_parse uses strtok itself. */
+    for (line = text; line != NULL && *line != 0; line = next) {
+        next = line + strcspn(line, "\r\n");
+
+        if (*next != 0) {
+            *next++ = 0;
+            next += strspn(next, "\r\n");
+        } else {
+            next = NULL;
+        }
         lineNo++;
         if (!strncmp(line, "#origin ", 8)) {
             snprintf(fileOrigin, sizeof(fileOrigin), "%s", line + 8);

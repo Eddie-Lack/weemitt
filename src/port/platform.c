@@ -1857,7 +1857,10 @@ static double real_arg(const char *option, const char *text, double lo, double h
         bad_usage("%s needs a number, not \"%s\"", option, text);
     }
     if (v > hi || v < lo || (openLo && v == lo)) {
-        bad_usage("%s is out of range: \"%s\"", option, text);
+        char msg[200];
+
+        snprintf(msg, sizeof(msg), "%s is %s %g to %g, not \"%%s\"%%s", option, openLo ? "more than" : "from", lo, hi);
+        bad_usage(msg, text, "");
     }
     return v;
 }
