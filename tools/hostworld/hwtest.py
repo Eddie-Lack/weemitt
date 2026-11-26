@@ -16,6 +16,7 @@ import argparse
 import math
 import os
 import pathlib
+import re
 import struct
 import subprocess
 import sys
@@ -432,12 +433,20 @@ def main():
     report(r.bodies[699]["restarts"] == r.bodies[499]["restarts"] + 1 and abs(h[0] + 300) <= 1 and abs(h[2] + 300) <= 1,
            "reload: the respawn stays; the restart after it puts the glove at %.1f %.1f" % (h[0], h[2]))
 
-    # A drawing view changes no logic; the mirror view changes nothing at all.
+    # A drawing view moves nothing, but its far distance becomes the game's farPlaneDist (docs/host-world.md, "The
+    # camera"). The game then updates another set of actors, which draw other random numbers: rseed may differ. At
+    # the level's own far distance (1000 in level 12) the trace is the same. The mirror view changes nothing at all.
     base = Run(exe, rom, sc("flat.scene"), 300, extra=("--hash-every", 1))
     r = Run(exe, rom, sc("view.scene"), 300, extra=("--hash-every", 1))
     strip = lambda ls: [l.split(" hash")[0] for l in ls]  # noqa: E731
-    report(strip(base.lines) == strip(r.lines) and base.lines != r.lines,
-           "view: a drawing view gives the same trace, and other memory (the matrices)")
+    no_seed = lambda ls: [re.sub(r" rseed \S+", "", l) for l in strip(ls)]  # noqa: E731
+    report(no_seed(base.lines) == no_seed(r.lines) and base.lines != r.lines,
+           "view: a drawing view gives the same positions and state but the random seed, and other memory")
+    near = OUT / "view-level-far.scene"
+    near.write_text(sc("view.scene").read_text().replace(" 10 4000\n", " 10 1000\n"))
+    r = Run(exe, rom, near, 300, extra=("--hash-every", 1))
+    report(strip(base.lines) == strip(r.lines),
+           "view: at the level's own far distance a drawing view gives the same trace, the random seed too")
     for level in (5, 13, 26):
         p = Run(exe, rom, sc("mirror.scene"), 200, level=level, extra=("--hash-every", 1))
         q = subprocess.run([exe, "--rom", rom, "--headless", "200", "--level", str(level), "--trace", "--hash-every",

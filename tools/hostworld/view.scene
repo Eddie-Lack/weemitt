@@ -1,5 +1,6 @@
-# The flat floor and a host camera that draws (flag 1) from above and to the side of the glove. It changes the
-# picture only: the glove and the ball move as without it.
+# The flat floor and a host camera that draws (flag 1) from above and to the side of the glove. The glove and the
+# ball move as without it. Its far distance (4000) becomes the game's farPlaneDist, which decides the actors that the
+# game updates, so the random seed can differ from a run without the view (docs/host-world.md, "The camera").
 tri -600 0 -600  -600 0 600  600 0 600  0
 tri -600 0 -600  600 0 600  600 0 -600  0
 place 0 hand 0 40 0 ball 0 40 60 yaw 0 camera

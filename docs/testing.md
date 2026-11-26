@@ -328,8 +328,11 @@ python3 tools/hostworld/hwtest.py --rom ROM          # needs make headless headl
 - `remove.scene`: the slider is removed while the glove stands on it; the glove then stands on the floor at 13.
 - `reload.scene`: a start of the same level builds the world once again (`rebuilds` 1), and the ball rests again.
   `respawn.scene`: the host's respawn stays after the reload; a restart then puts the glove there.
-- `view.scene`: a drawing view gives the same trace, and another memory hash. `mirror.scene` in levels 5, 13 and
-  26: the same trace and memory hash as without a view.
+- `view.scene`: a drawing view gives the same positions and state as without it, but `rseed` can differ, and the
+  memory hash differs. The view's far distance (4000) becomes the game's `farPlaneDist`, which decides which actors
+  the game updates, and those draw random numbers (host-world.md, "The camera"). The same scene with the level's own
+  far distance (1000) gives the same trace, `rseed` too. `mirror.scene` in levels 5, 13 and 26: the same trace and
+  memory hash as without a view.
 - `steer.scene`: with a steering view along +x and the stick pushed up, the glove walks along +x within 10 degrees.
 - A generated terrain of 39,200 triangles, written to `build/hostworld/` at run time: the time of 1000 frames.
 - Every scene in the build with `PORT_PTR_CHECK` (`make headless-displaced`) without a fatal error. Two variants of

@@ -306,7 +306,8 @@ Removing a body calls the game's `KillPlatform`, after the library has cleared t
 
 - **`GLOVER_VIEW_DRAW`**: a hook in `SetupViewing` (`main.c`), after the game builds its matrices, builds them again
   from the view with the port's own `guPerspective` and `guLookAt`. The sprites (`overlay.c`) use the same
-  matrices. The game's logic does not change.
+  matrices. It moves nothing in the game, but it can change the game's logic: the view's far distance becomes the
+  game's draw distance, which decides the actors that the game updates (below).
 - **`GLOVER_VIEW_STEER`**: before each update the game's camera is put at the eye, looking at the point. The game
   then skips `MoveCam` and `PlayerSpinCamera`. The controls, the sound and the game's distance tests follow the
   host's camera: with the stick pushed up the glove walks away from the eye. The game's camera logic does not run
@@ -322,7 +323,10 @@ While a drawing view is on, the far distance is the view's `farZ`, at most 32,76
 in level 12). A host at a large scale has its camera farther from the glove in game units: at 2 game units per
 host unit, the level's 1000 units are 500 of the host's. The hook writes `farPlaneDist` at each drawn frame, and the
 logic between two frames sees the view's value too. A level load writes the level's value again, and the next frame
-replaces it. When the view stops drawing, the level's value comes back.
+replaces it. When the view stops drawing, the level's value comes back. A far distance other than the level's
+changes the logic: the game updates the actors within it (`IsActorVisible`), and those draw random numbers. A run
+with a drawing view can therefore have another `rseed` than the same run without it. With the level's own far
+distance the run is the same.
 
 Four other rules measure the distance from the camera: the sound fades out at the level's sound distance
 (`MAX_SFX_DIST`, 1000 units in level 12), wakes on the water are made within 283 units (`CreateWake`), debris
@@ -444,6 +448,8 @@ data:
 | `hostwater.scene` | a host water over a floor: the glove swims, the ball floats, then the water goes |
 | `reload.scene` | a reload of the level: the world is built again |
 | `respawn.scene` | a respawn that stays after a reload of the level |
+| `hold.scene` | the glove holds the ball; a place of one of them moves both |
+| `water.scene` | a floor under level 12's water: the ball rests on it |
 | `view.scene`, `steer.scene`, `mirror.scene` | a drawing view, a steering view, and the mirror view |
 
 [testing.md](testing.md#the-host-world) lists the tests.
