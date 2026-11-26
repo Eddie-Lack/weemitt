@@ -150,6 +150,8 @@ void settings_defaults(Settings *st) {
     st->widescreen = WIDESCREEN_OFF;
     st->debugPad = DEBUGPAD_OFF;
     st->timerScale = TIMER_SCALE_DEFAULT;
+    st->studioSearch = 1;
+    st->studioInput = 1;
 }
 
 void settings_default_pads(Settings *st) {
@@ -305,15 +307,22 @@ void settings_default_keys(Settings *st) {
     memcpy(st->keys, defaultKeys, sizeof(st->keys));
 }
 
-void settings_path(char *out, int size) {
+int settings_folder(char *out, int size) {
     char *pref = SDL_GetPrefPath("weemitt", "Glover");
 
-    snprintf(out, size, "%ssettings.ini", pref ? pref : "");
+    snprintf(out, size, "%s", pref ? pref : "");
     if (pref == NULL) {
-        out[0] = 0;
-    } else {
-        SDL_free(pref);
+        return -1;
     }
+    SDL_free(pref);
+    return 0;
+}
+
+void settings_path(char *out, int size) {
+    char folder[1024];
+
+    settings_folder(folder, sizeof(folder));
+    snprintf(out, size, "%ssettings.ini", folder);
 }
 
 int settings_input_down(const Settings *st, const unsigned char *keys, int input) {
@@ -362,7 +371,9 @@ void settings_load(Settings *st, const char *path) {
         }
         *val++ = 0;
         if (!strcmp(key, "physics_mode")) {
-            st->physicsMode = atoi(val) == PHYSICS_SMOOTH ? PHYSICS_SMOOTH : PHYSICS_ORIGINAL;
+            int v = atoi(val);
+
+            st->physicsMode = v == PHYSICS_SMOOTH || v == PHYSICS_FIXED ? v : PHYSICS_ORIGINAL;
         } else if (!strcmp(key, "vsync")) {
             st->vsync = atoi(val) != 0;
         } else if (!strcmp(key, "max_fps")) {
@@ -435,6 +446,32 @@ void settings_load(Settings *st, const char *path) {
             int v = atoi(val);
 
             st->widescreen = v == WIDESCREEN_STRETCH || v == WIDESCREEN_HORPLUS ? v : WIDESCREEN_OFF;
+        } else if (!strcmp(key, "fullscreen")) {
+            st->fullscreen = atoi(val) != 0;
+        } else if (!strcmp(key, "window_x")) {
+            st->windowX = atoi(val);
+        } else if (!strcmp(key, "window_y")) {
+            st->windowY = atoi(val);
+        } else if (!strcmp(key, "window_w")) {
+            int v = atoi(val);
+
+            st->windowW = v < 0 ? 0 : v > 16384 ? 16384 : v;
+        } else if (!strcmp(key, "window_h")) {
+            int v = atoi(val);
+
+            st->windowH = v < 0 ? 0 : v > 16384 ? 16384 : v;
+        } else if (!strcmp(key, "pause_menu")) {
+            st->pauseMenu = atoi(val) != 0;
+        } else if (!strcmp(key, "pause_unfocused")) {
+            st->pauseUnfocused = atoi(val) != 0;
+        } else if (!strcmp(key, "studio_search")) {
+            st->studioSearch = atoi(val) != 0;
+        } else if (!strcmp(key, "studio_input")) {
+            st->studioInput = atoi(val) != 0;
+        } else if (!strcmp(key, "studio_level")) {
+            st->studioLevel = atoi(val) != 0;
+        } else if (!strcmp(key, "studio_states")) {
+            st->studioStates = atoi(val) != 0;
         } else if (!strcmp(key, "stick_dead")) {
             int v = atoi(val);
 
@@ -491,7 +528,39 @@ void settings_load(Settings *st, const char *path) {
     fclose(f);
 }
 
-int settings_save(const Settings *st, const char *path) {
+static int haveFile;
+static Settings fileSettings;
+static Settings startSettings;
+
+void settings_keep_file(const Settings *file, const Settings *start) {
+    fileSettings = *file;
+    startSettings = *start;
+    haveFile = 1;
+}
+
+/* What settings_save writes: the value of st where it changed during the run, and the file's own value where it did
+   not. A command-line option changes the start's value, and the menu changes st. */
+static void for_file(const Settings *st, Settings *out) {
+    *out = *st;
+    if (!haveFile) {
+        return;
+    }
+#define KEEP(field) if (memcmp(&st->field, &startSettings.field, sizeof(st->field)) == 0) \
+        memcpy(&out->field, &fileSettings.field, sizeof(out->field))
+    KEEP(physicsMode); KEEP(vsync); KEEP(maxFps); KEEP(keys); KEEP(pads); KEEP(joys); KEEP(stickDead);
+    KEEP(stickRange); KEEP(volume); KEEP(cameraFollow); KEEP(ballworld); KEEP(easyBall); KEEP(logFile);
+    KEEP(logVerbose); KEEP(recordInput); KEEP(musicVolume); KEEP(effectsVolume); KEEP(muteUnfocused);
+    KEEP(skipIntro); KEEP(infiniteLives); KEEP(infiniteHealth); KEEP(unlockAll); KEEP(levelSelect);
+    KEEP(pauseCheats); KEEP(debugRange); KEEP(collisionTypes); KEEP(stepKey); KEEP(pauseKey); KEEP(renderScale);
+    KEEP(msaa); KEEP(texFilter); KEEP(widescreen); KEEP(fullscreen); KEEP(windowX); KEEP(windowY); KEEP(windowW);
+    KEEP(windowH); KEEP(pauseMenu); KEEP(pauseUnfocused); KEEP(studioSearch); KEEP(studioInput); KEEP(studioLevel);
+    KEEP(studioStates);
+#undef KEEP
+}
+
+int settings_save(const Settings *live, const char *path) {
+    Settings copy;
+    const Settings *st = &copy;
     FILE *f;
     int i;
     int s;
@@ -499,11 +568,23 @@ int settings_save(const Settings *st, const char *path) {
     if (path == NULL || path[0] == 0 || (f = fopen(path, "w")) == NULL) {
         return -1;
     }
-    fprintf(f, "# weemitt settings. The menu (Escape) writes this file.\n# Keys are SDL scancode numbers (4 is A, 44 is Space); 0 means no key.\n[graphics]\nphysics_mode=%d\nvsync=%d\nmax_fps=%d\n[enhancements]\neasy_ball=%d\nballworld=%d\ncamera_follow=%.2f\n[audio]\nmaster_volume=%d\n[developer]\nlog_file=%d\nlog_verbose=%d\nrecord_input=%d\n[controller]\nstick_dead=%d\nstick_range=%d\n[keys]\n",
-            st->physicsMode, st->vsync, st->maxFps, st->easyBall, st->ballworld, (double)st->cameraFollow, st->volume, st->logFile, st->logVerbose, st->recordInput, st->stickDead, st->stickRange);
-    fprintf(f, "[play]\nmusic_volume=%d\neffects_volume=%d\nmute_unfocused=%d\nskip_intro=%d\ninfinite_lives=%d\ninfinite_health=%d\nunlock_all=%d\nlevel_select=%d\npause_cheats=%d\n",
-            st->musicVolume, st->effectsVolume, st->muteUnfocused, st->skipIntro, st->infiniteLives, st->infiniteHealth,
-            st->unlockAll, st->levelSelect, st->pauseCheats);
+    for_file(live, &copy);
+    fprintf(f, "# weemitt settings. The menu (Escape) writes this file.\n# Keys are SDL scancode numbers (4 is A, 44 is Space); 0 means no key.\n"
+               "[graphics]\n# physics_mode: 0 Smooth, 1 Original (interpolated), 2 Original (no blending).\nphysics_mode=%d\nvsync=%d\nmax_fps=%d\n"
+               "[window]\n# window_w 0: the default size, centred.\nfullscreen=%d\nwindow_x=%d\nwindow_y=%d\nwindow_w=%d\nwindow_h=%d\n"
+               "pause_menu=%d\npause_unfocused=%d\n"
+               "[enhancements]\neasy_ball=%d\nballworld=%d\ncamera_follow=%.2f\n"
+               "[audio]\nmaster_volume=%d\nmusic_volume=%d\neffects_volume=%d\nmute_unfocused=%d\n"
+               "[developer]\nlog_file=%d\nlog_verbose=%d\nrecord_input=%d\n[controller]\nstick_dead=%d\nstick_range=%d\n",
+            st->physicsMode, st->vsync, st->maxFps, st->fullscreen, st->windowX, st->windowY, st->windowW, st->windowH,
+            st->pauseMenu, st->pauseUnfocused, st->easyBall, st->ballworld, (double)st->cameraFollow, st->volume,
+            st->musicVolume, st->effectsVolume, st->muteUnfocused, st->logFile, st->logVerbose, st->recordInput,
+            st->stickDead, st->stickRange);
+    fprintf(f, "[play]\nskip_intro=%d\ninfinite_lives=%d\ninfinite_health=%d\nunlock_all=%d\nlevel_select=%d\npause_cheats=%d\n",
+            st->skipIntro, st->infiniteLives, st->infiniteHealth, st->unlockAll, st->levelSelect, st->pauseCheats);
+    fprintf(f, "[studio]\n# The studio's windows that show: 1 or 0.\nstudio_search=%d\nstudio_input=%d\nstudio_level=%d\nstudio_states=%d\n",
+            st->studioSearch, st->studioInput, st->studioLevel, st->studioStates);
+    fprintf(f, "[keys]\n");
     for (i = 0; i < IN_COUNT; i++) {
         fprintf(f, "key.%s=", inputNames[i]);
         for (s = 0; s < KEY_SLOTS; s++) {
