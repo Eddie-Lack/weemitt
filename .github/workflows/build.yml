@@ -1,0 +1,51 @@
+# Builds the Linux and Windows programs on every push and pull request, and keeps them as build artifacts.
+# It makes no release and no tag. The programs hold no game data: each player needs their own ROM.
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the packages
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib libsdl2-dev libsdl2-2.0-0:i386 libgl1:i386
+      - name: Build
+        run: make -j4
+      - name: Pack
+        run: |
+          mkdir -p out/weemitt-linux
+          cp build/linux/weemitt README.md LICENSE THIRD_PARTY_NOTICES.md docs/playing.md out/weemitt-linux/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weemitt-linux
+          path: out/weemitt-linux
+
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 g++-mingw-w64-i686 cmake ninja-build
+      - name: Build SDL2 for Windows
+        run: tools/build_sdl_mingw.sh
+      - name: Build
+        run: make windows -j4
+      - name: Pack
+        run: |
+          mkdir -p out/weemitt-windows
+          cp build/windows/weemitt.exe deps/SDL2-mingw/i686-w64-mingw32/bin/SDL2.dll out/weemitt-windows/
+          cp README.md LICENSE THIRD_PARTY_NOTICES.md docs/playing.md out/weemitt-windows/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weemitt-windows
+          path: out/weemitt-windows
