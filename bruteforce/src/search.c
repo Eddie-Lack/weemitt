@@ -39,6 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "cond.h"
 #include "engine.h"
@@ -193,6 +194,26 @@ static void load_config(Config *c, const char *path) {
     j = json_parse(text, err, sizeof(err));
     if (j == NULL) {
         die("search: %s: %s", path, err);
+    }
+    if (j->type != JSON_OBJECT) {
+        die("search: %s: the config is a JSON object", path);
+    }
+    {
+        /* A key that the search does not know is a mistake (a typo would leave its default in place). */
+        static const char *const known[] = {
+            "rom", "run", "out", "window", "lookahead", "goal", "fail", "progress", "points", "buttons", "stick",
+            "perturb", "limits", "workers", "seconds", "seed", "cache", "trimDraw", "loadFrames", NULL,
+        };
+
+        for (i = 0; i < j->count; i++) {
+            int k;
+
+            for (k = 0; known[k] != NULL && strcmp(known[k], j->keys[i]) != 0; k++) {
+            }
+            if (known[k] == NULL) {
+                die("search: %s: unknown key \"%s\" in the config", path, j->keys[i]);
+            }
+        }
     }
     memset(c, 0, sizeof(*c));
     c->rom = beside(path, json_string(j, "rom", NULL));
@@ -1125,6 +1146,8 @@ int search_main(int argc, char **argv) {
             quote_arg(cmd, sizeof(cmd), num);
             procs[i] = proc_start(cmd);
         }
+        int tty = isatty(fileno(stdout));
+
         for (;;) {
             long tries = 0;
             double t;
@@ -1180,7 +1203,12 @@ int search_main(int argc, char **argv) {
                     fclose(f);
                 }
             }
-            printf("\rsearch: %7.1f s  %ld tries (%.0f a second)  ", t, tries, t > 0 ? tries / t : 0.0);
+            if (tty) {
+                printf("\rsearch: %7.1f s  %ld tries (%.0f a second)  ", t, tries, t > 0 ? tries / t : 0.0);
+            } else if ((long)t % 10 == 0) {
+                /* A file or a pipe (the studio's search.log) gets a whole line every 10 seconds. */
+                printf("search: %7.1f s  %ld tries (%.0f a second)\n", t, tries, t > 0 ? tries / t : 0.0);
+            }
             fflush(stdout);
             if (c.seconds > 0 && t > c.seconds + 3) {
                 break;
@@ -1209,7 +1237,9 @@ int search_main(int argc, char **argv) {
                 }
             }
         }
-        printf("\n");
+        if (tty) {
+            printf("\n");
+        }
         for (i = 0; i < n; i++) {
             if (procs[i] != NULL) {
                 proc_wait(procs[i]);
@@ -1224,6 +1254,10 @@ int search_main(int argc, char **argv) {
         free(line);
         if (logf != NULL) {
             fclose(logf);
+        }
+        if (bestLine == NULL) {
+            printf("search: the search ended without a result (the workers' messages are above)\n");
+            return 1;
         }
     }
     return 0;

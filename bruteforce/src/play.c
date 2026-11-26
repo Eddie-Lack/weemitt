@@ -84,7 +84,13 @@ int play_main(int argc, char **argv) {
         if (!strcmp(a, "--rom") && next) {
             rom = argv[++i];
         } else if (!strcmp(a, "--level") && next) {
-            opt.startLevel = atoi(argv[++i]);
+            char *end;
+            long level = strtol(argv[++i], &end, 10);
+
+            if (end == argv[i] || *end != 0 || level < -1 || level > 47) {
+                die("play: --level is -1 (power-on) to 47, not \"%s\"", argv[i]);
+            }
+            opt.startLevel = (int)level;
         } else if (!strcmp(a, "--input") && next) {
             inputPath = argv[++i];
         } else if (!strcmp(a, "--events") && next) {
