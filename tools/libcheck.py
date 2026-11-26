@@ -488,6 +488,7 @@ def main():
     ap.add_argument("--wine", action="store_true")
     ap.add_argument("--gl", action="store_true")
     args = ap.parse_args()
+    regress.require_rom(args.rom, "libcheck.py")
     builds = [Build(bits) for bits in ((args.bits,) if args.bits else (64, 32))]
     for b in builds:
         for lib in (b.lib, b.stub) + ((b.hostgfx,) if b.bits == 64 else ()):

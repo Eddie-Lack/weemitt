@@ -19,6 +19,8 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import regress  # noqa: E402
 
 BUTTON_L = 0x20
 JOINED, BALLWALK = 3, 20
@@ -62,9 +64,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--spacings", default="2,3,4,6,8")
     ap.add_argument("--presses", type=int, default=12)
-    ap.add_argument("--rom", default=os.environ.get("ROM", "../gloveworld/baserom.us.z64"))
+    ap.add_argument("--rom", default=os.environ.get("ROM") or regress.default_rom())
     ap.add_argument("--exe", default=str(ROOT / "build/headless/weemitt"))
     a, extra = ap.parse_known_args()
+    regress.require_rom(a.rom, "tapcheck.py")
     extra = [x for x in extra if x != "--"]
     for k in [int(x) for x in a.spacings.split(",")]:
         starts, modes = run(a.exe, a.rom, k, a.presses, extra)

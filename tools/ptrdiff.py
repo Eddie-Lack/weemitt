@@ -32,6 +32,8 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import regress  # noqa: E402
 # The image of the normal build, as the memory hash counts it (platform.c), and the function handles (ptr32.h).
 IMAGE = (0x08048000, 0x0D80110C)
 FN_BASE = 0x0BF00000
@@ -61,13 +63,14 @@ def dump(exe, rom, level, frame, path, script=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rom", default=os.environ.get("GLOVER_ROM", str(ROOT.parent / "gloveworld" / "baserom.us.z64")))
+    ap.add_argument("--rom", default=regress.default_rom())
     ap.add_argument("--level", type=int, action="append")
     ap.add_argument("--frame", type=int, action="append")
     ap.add_argument("--input", action="store_true")
     ap.add_argument("--audio", action="store_true")
     ap.add_argument("--other")
     args = ap.parse_args()
+    regress.require_rom(args.rom, "ptrdiff.py")
     suffix = "-mus" if args.audio else ""
     normal = ROOT / "build" / f"headless{suffix}" / "weemitt"
     displaced = args.other or ROOT / "build" / f"headless-displaced{suffix}" / "weemitt"
@@ -78,8 +81,6 @@ def main():
         for level in args.level or [0, 5, 13]:
             script = None
             if args.input:
-                sys.path.insert(0, str(ROOT / "tools"))
-                import regress
                 script = os.path.join(tmp, f"level{level}.input")
                 with open(script, "w") as f:
                     f.write(regress.input_script(level, max(args.frame or [300]) + 2))
