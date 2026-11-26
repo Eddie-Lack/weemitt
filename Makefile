@@ -70,6 +70,7 @@ PLATFORM_SRCS := src/port/platform.c src/port/inputevent.c src/port/settings.c s
 ifeq ($(RENDERER),null)
 GFX_SRCS := src/port/gfx_null.c src/port/menu_null.c
 CXX_SRCS :=
+RENDERER_DEFINES := -DPORT_RENDERER_NULL
 else ifeq ($(RENDERER),hostgfx)
 # Only the library: the display list walk and the translation for the host's interpreter (glover_host_gfx), with no
 # OpenGL. gfx_sink_null.c stands in for gfx_render.c, and nothing for gfx_tex.c's decoded textures.
@@ -182,7 +183,7 @@ GAME_CFLAGS := -std=gnu89 $(GAME_FLAGS)
 GAME_CXXFLAGS := -x c++ -std=gnu++14 -fno-exceptions -fno-rtti -fno-finite-loops $(CLANG_FLAGS) $(GAME_FLAGS)
 # The platform layer and the renderer talk to SDL and OpenGL, so they keep the system's structure layout.
 HOST_CFLAGS := $(ARCH_FLAGS) -std=gnu99 -O2 -g $(PIC_FLAGS) -Wall -Wno-unused-function -Isrc/port -Isrc/gfx $(SDL_CFLAGS) \
-               $(AUDIO_DEFINES) $(PTR_FLAGS)
+               $(AUDIO_DEFINES) $(RENDERER_DEFINES) $(PTR_FLAGS)
 HOST_CFLAGS += $(LIB_FLAGS)
 # SPACE_DEMO=1: the platform layer starts the Space demo without options.
 ifeq ($(SPACE_DEMO),1)

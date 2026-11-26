@@ -1257,7 +1257,7 @@ static void run(void) {
             audio_drain();
         }
         CALL(lib.glover_status(game, &st));
-        fakeTimeUs += (unsigned long long)(step * st.retraces * 1000000.0 / 60.0);
+        fakeTimeUs += (unsigned long long)((double)(float)step * st.retraces * 1000000.0 / 60.0);
         if (out.listCount >= 0) {
             hostLists = out;
         }

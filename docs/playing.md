@@ -8,7 +8,7 @@ weemitt needs your own copy of the Glover (USA) ROM. The game code is NGVE. Othe
 
 - The ROM can be in any of the three usual byte orders: `.z64`, `.v64` or `.n64`.
 - Put the ROM next to the program, or in the folder you start it from. The program then finds it by itself. It
-  first tries the names `glover.z64`, `Glover.z64`, `Glover (USA).z64`, `baserom.us.z64`, `glover.n64` and
+  first tries the names `baserom.us.z64`, `glover.z64`, `Glover.z64`, `Glover (USA).z64`, `glover.n64` and
   `glover.v64`. Then it tries every other file that ends in `.z64`, `.v64` or `.n64`, in any letter case, and
   takes the first one that is Glover (USA).
 - Or name the ROM when you start the program: `weemitt /path/to/glover.z64`, or `weemitt --rom /path/to/glover.z64`.

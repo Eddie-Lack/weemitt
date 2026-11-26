@@ -25,6 +25,16 @@ int menu_handle_event(const SDL_Event *e);
 int menu_is_open(void);
 /* Draws the menu over the finished game frame. Call it before the buffer swap. */
 void menu_draw(SDL_Window *window);
+/* Shows a line of text at the top of the window for a few seconds, also while the menu is closed. */
+void menu_notice(const char *text);
+/* The settings changed outside the menu (the window's size and place, full screen): save them with the menu's. */
+void menu_settings_changed(void);
+/* Why there is no sound, for the Audio window (empty when the sound works or was turned off). The platform layer
+   provides it. */
+const char *port_sound_problem(void);
+/* Full screen: on or off, and the choice is kept in the settings. The platform layer provides them. */
+int port_fullscreen(void);
+void port_set_fullscreen(int on);
 
 #ifdef __cplusplus
 }
