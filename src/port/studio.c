@@ -11,6 +11,10 @@
 #include <math.h>
 #include <stddef.h>
 #include <sys/stat.h>
+#include <wchar.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "engine.h"
 #include "inputs.h"
@@ -80,7 +84,11 @@ static int showPending;
 /* The controller while paused: the buttons of the previous poll, and how long the held direction has repeated. */
 static unsigned short prevPoll;
 static unsigned short chordMask;
+static unsigned short resumeMask; /* A after a resume with A: the game gets it once it has been released */
 static int holdFrames;
+
+/* Where the timeline starts, for route files: "power-on", "level N" or "state HASH". */
+static char origin[64] = "power-on";
 
 /* The self-test: the trace line of every frame, and the whole state's hash every HASH_EVERY frames. */
 #define HASH_EVERY 50
@@ -95,12 +103,25 @@ int studio_command(int argc, char **argv, int *code) {
     }
 #ifdef _WIN32
     /* The studio is a window program, which Windows starts without a console. A command run from a console
-       writes to it. */
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        freopen("CONOUT$", "w", stdout);
-        freopen("CONOUT$", "w", stderr);
+       writes to it, unless its output is already redirected to a file or a pipe. */
+    {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+
+        if ((out == NULL || out == INVALID_HANDLE_VALUE || err == NULL || err == INVALID_HANDLE_VALUE)
+            && AttachConsole(ATTACH_PARENT_PROCESS)) {
+            if (out == NULL || out == INVALID_HANDLE_VALUE) {
+                freopen("CONOUT$", "w", stdout);
+            }
+            if (err == NULL || err == INVALID_HANDLE_VALUE) {
+                freopen("CONOUT$", "w", stderr);
+            }
+        }
     }
 #endif
+    /* The game's own messages (the textures it does not find, its memory blocks) are left out, as the brute
+       forcer's own program leaves them out. */
+    port_log_quiet = 1;
     *code = glover_main(argc, argv);
     return 1;
 }
@@ -258,7 +279,10 @@ static void keep_shown(const PortFrameTask *tasks, long count) {
     }
 }
 
-void studio_started(void) {
+void studio_started(long level) {
+    if (level >= 0) {
+        snprintf(origin, sizeof(origin), "level %ld", level);
+    }
     cur = 0;
     length = 0;
     save_key();
@@ -401,16 +425,19 @@ int studio_take_step(void) {
     return 0;
 }
 
+static void drop_undo(void);
+
 void studio_set_paused(int on) {
     if (on) {
         paused = 1;
         playing = 0;
         return;
     }
-    /* Resume with the player's input: the frames after the one on show go. */
+    /* Resume with the player's input: the frames after the one on show go, and so does the take's undo. */
     seekPending = 0;
     stepRequests = 0;
     truncate_at(cur);
+    drop_undo();
     paused = 0;
     playing = 0;
 }
@@ -441,6 +468,7 @@ int studio_goto_level(long level) {
     }
     port_goto_level(level);
     stepRequests = 0;
+    snprintf(origin, sizeof(origin), "level %ld", level);
     /* The new timeline's first state holds the jump that is due. */
     while (nkeys > 0) {
         drop_key(nkeys - 1);
@@ -454,6 +482,10 @@ int studio_goto_level(long level) {
     save_key();
     if (selftest) {
         record_selftest();
+    }
+    if (paused) {
+        /* While paused, one frame runs at once: the level's first frame shows, not the old picture. */
+        stepRequests = 1;
     }
     return 1;
 }
@@ -506,16 +538,31 @@ static FILE *open_utf8(const char *path, const char *mode) {
 #endif
 }
 
-/* Makes a folder by its UTF-8 path. */
-static void make_dir_utf8(const char *path) {
+/* Makes a folder by its UTF-8 path. Returns 0 when it made it. */
+static int make_dir_utf8(const char *path) {
 #ifdef _WIN32
     wchar_t wpath[1024];
 
     if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, 1024) != 0) {
-        _wmkdir(wpath);
+        return _wmkdir(wpath);
     }
+    return -1;
 #else
-    make_dir(path);
+    return make_dir(path);
+#endif
+}
+
+/* Removes a file or an empty folder by its UTF-8 path. Returns 0 when it did. */
+static int remove_utf8(const char *path, int folder) {
+#ifdef _WIN32
+    wchar_t wpath[1024];
+
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, 1024) == 0) {
+        return -1;
+    }
+    return folder ? _wrmdir(wpath) : _wremove(wpath);
+#else
+    return folder ? rmdir(path) : remove(path);
 #endif
 }
 
@@ -594,7 +641,7 @@ int studio_save_state(const char *path, char *err, int errSize) {
         snprintf(err, errSize, "Cannot write %s.", path);
         return -1;
     }
-    plog_printf("studio: saved frame %ld to %s", cur, path);
+    plog_printf("studio: saved the timeline's frame %ld to %s", cur, path);
     return 0;
 }
 
@@ -677,6 +724,7 @@ int studio_load_state(const char *path, char *err, int errSize) {
     shownCount = (int)h.taskCount;
     memcpy(shownTasks, h.tasks, sizeof(shownTasks));
     showPending = 1;
+    snprintf(origin, sizeof(origin), "state %016llx", (unsigned long long)h.checksum);
     forget_marks();
     save_key();
     if (selftest) {
@@ -709,20 +757,27 @@ static int compare_names(const void *a, const void *b) {
     return strcmp((const char *)a, (const char *)b);
 }
 
-/* Adds the file name to the list when it ends in .state and its name fits. */
-static int add_listed(char (*names)[128], int n, const char *file) {
+/* Adds the file name to the list when it ends in ext and its name fits. */
+static int add_listed(char (*names)[128], int n, const char *file, const char *ext) {
     size_t len = strlen(file);
+    size_t e = strlen(ext);
 
-    if (len > 6 && len - 6 < sizeof(names[0]) && strcmp(file + len - 6, ".state") == 0) {
-        memcpy(names[n], file, len - 6);
-        names[n][len - 6] = 0;
+    if (len > e && len - e < sizeof(names[0]) && strcmp(file + len - e, ext) == 0) {
+        memcpy(names[n], file, len - e);
+        names[n][len - e] = 0;
         return n + 1;
     }
     return n;
 }
 
+static int list_folder(const char *folder, const char *ext, char (*names)[128], int max);
+
 int studio_list_states(char (*names)[128], int max) {
-    const char *folder = studio_states_folder();
+    return list_folder(studio_states_folder(), ".state", names, max);
+}
+
+/* The names of the files NAME.EXT in the folder, sorted. */
+static int list_folder(const char *folder, const char *ext, char (*names)[128], int max) {
     int n = 0;
 #ifdef _WIN32
     char pattern[1100];
@@ -734,7 +789,7 @@ int studio_list_states(char (*names)[128], int max) {
         return 0;
     }
     /* The names come as UTF-16 and go into the list as UTF-8. */
-    snprintf(pattern, sizeof(pattern), "%s*.state", folder);
+    snprintf(pattern, sizeof(pattern), "%s*%s", folder, ext);
     if (MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wpattern, 1100) == 0) {
         return 0;
     }
@@ -747,7 +802,7 @@ int studio_list_states(char (*names)[128], int max) {
 
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
             WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, file, sizeof(file), NULL, NULL) != 0) {
-            n = add_listed(names, n, file);
+            n = add_listed(names, n, file, ext);
         }
     } while (n < max && FindNextFileW(find, &fd));
     FindClose(find);
@@ -759,7 +814,7 @@ int studio_list_states(char (*names)[128], int max) {
         return 0;
     }
     while (n < max && (ent = readdir(d)) != NULL) {
-        n = add_listed(names, n, ent->d_name);
+        n = add_listed(names, n, ent->d_name, ext);
     }
     closedir(d);
 #endif
@@ -823,8 +878,20 @@ int studio_state_path(const char *name, char *path, int pathSize, char *err, int
     if (len > 6 && strcmp(name + len - 6, ".state") == 0) {
         len -= 6;
     }
-    if (len == 0 || len > 100 || name[0] == '.' || name[0] == ' ') {
-        snprintf(err, errSize, "Give the state a name.");
+    while (len > 0 && name[len - 1] == ' ') {
+        /* Spaces at the end are left out: "route " is "route". */
+        len--;
+    }
+    if (len == 0) {
+        snprintf(err, errSize, "Give it a name.");
+        return -1;
+    }
+    if (len > 100) {
+        snprintf(err, errSize, "A name has at most 100 characters.");
+        return -1;
+    }
+    if (name[0] == '.' || name[0] == ' ') {
+        snprintf(err, errSize, "A name cannot start with '.' or a space.");
         return -1;
     }
     for (i = 0; i < len; i++) {
@@ -861,8 +928,8 @@ int studio_state_exists(const char *name) {
 }
 
 const char *studio_controls_help(void) {
-    return "Paused. D-pad: a frame back or on. L, R: a second back or on. A or all C buttons: play on from here. "
-           "B: play the recording.";
+    return "Paused. D-pad left, right: a frame back or on. L, R: a second back or on. A or all C buttons: play on "
+           "from here. B: play the recording.";
 }
 
 /* A held button acts once, then repeats after a short wait. */
@@ -886,6 +953,9 @@ void studio_poll(unsigned short *buttons, signed char *x, signed char *y) {
     } else if ((b & C_BUTTONS) == 0) {
         chordMask = 0;
     }
+    if (!(b & BTN_A)) {
+        resumeMask = 0;
+    }
     if (chord) {
         studio_set_paused(!paused);
     } else if (paused) {
@@ -899,7 +969,9 @@ void studio_poll(unsigned short *buttons, signed char *x, signed char *y) {
         } else if (pressed_or_repeated(b, BTN_R)) {
             studio_request_seek(cur + JUMP);
         } else if ((b & BTN_A) && !(prevPoll & BTN_A)) {
+            /* The A that resumes is the studio's: the game gets A again after it has been released. */
             studio_set_paused(0);
+            resumeMask = BTN_A;
         } else if ((b & BTN_B) && !(prevPoll & BTN_B)) {
             studio_play_recording();
         }
@@ -911,12 +983,22 @@ void studio_poll(unsigned short *buttons, signed char *x, signed char *y) {
         *x = 0;
         *y = 0;
     } else {
-        *buttons = b & ~chordMask;
+        *buttons = b & ~(chordMask | resumeMask);
     }
 }
 
 unsigned short studio_input_mask(void) {
-    return paused ? 0xFFFF : chordMask;
+    return paused ? 0xFFFF : chordMask | resumeMask;
+}
+
+int studio_input_at(long f, unsigned short *buttons, signed char *x, signed char *y) {
+    if (f < 0 || f >= length) {
+        return 0;
+    }
+    *buttons = inputs[f].buttons;
+    *x = inputs[f].x;
+    *y = inputs[f].y;
+    return 1;
 }
 
 /* ---- The bar. */
@@ -952,13 +1034,39 @@ static Uint32 lastPoll;
 static StudioSearchInfo search;
 static EngineInput *best;  /* the best inputs of the window */
 static long bestLength;
-/* The timeline before the latest studio_take_result. */
+/* The timeline before the first studio_take_result of the latest search. It stays until the player plays on,
+   undoes the take or starts a new search. */
 static EngineInput *undoInputs;
 static long undoLength;
 static long undoStart = -1;
+static Uint32 searchStartTicks;  /* when the latest search started (SDL_GetTicks) */
+
+static void drop_undo(void) {
+    free(undoInputs);
+    undoInputs = NULL;
+    undoLength = 0;
+    undoStart = -1;
+    search.takenFrame = -1;
+}
 
 void studio_set_rom_path(const char *path) {
-    snprintf(romPath, sizeof(romPath), "%s", path);
+    /* The search reads the ROM from its own folder: a relative path must be made absolute. */
+#ifdef _WIN32
+    if (_fullpath(romPath, path, sizeof(romPath)) == NULL) {
+        snprintf(romPath, sizeof(romPath), "%s", path);
+    }
+#else
+    if (realpath(path, romPath) == NULL) {
+        snprintf(romPath, sizeof(romPath), "%s", path);
+    }
+#endif
+}
+
+int studio_input_changed(long f) {
+    if (undoInputs == NULL || f < undoStart || f >= length) {
+        return 0;
+    }
+    return f >= undoLength || memcmp(&inputs[f], &undoInputs[f], sizeof(EngineInput)) != 0;
 }
 
 /* The position (Vec3 at 0x34 of gloveworld's Actor) of the glove or the ball now. */
@@ -1003,6 +1111,15 @@ void studio_add_level_end(void) {
 
     if (p != NULL) {
         p->place = 0;
+        /* gameInfo.exitFlags (the point's condition, see studio_start_search). A search needs a route that already
+           ends the level: the point gives it no distance to follow. */
+        if (!(engine_read8(engine, engine_symbol("gameInfo") + 0x54) & 2)) {
+            snprintf(search.message, sizeof(search.message),
+                     "The level is not done at frame %ld. The search needs a route that ends the level: mark this "
+                     "point on a frame after the level's exit has started.", cur);
+        } else {
+            search.message[0] = 0;
+        }
     }
 }
 
@@ -1035,13 +1152,12 @@ static void forget_marks(void) {
     memset(&search, 0, sizeof(search));
     search.bestFrame = -1;
     search.firstFrame = -1;
+    search.baseFrame = -2;
+    search.takenFrame = -1;
     free(best);
     best = NULL;
     bestLength = 0;
-    free(undoInputs);
-    undoInputs = NULL;
-    undoLength = 0;
-    undoStart = -1;
+    drop_undo();
 }
 
 /* Goes to a frame at once (the window picks up the new picture at its next seek). */
@@ -1081,13 +1197,27 @@ int studio_start_search(int workers, double seconds, const char *limits) {
         snprintf(search.message, sizeof(search.message), "A search is running. Stop it first.");
         return -1;
     }
-    if (startFrame < 0 || startFrame >= length) {
+    if (startFrame < 0) {
         snprintf(search.message, sizeof(search.message), "Mark a start point on the timeline first.");
+        return -1;
+    }
+    if (startFrame >= length) {
+        snprintf(search.message, sizeof(search.message),
+                 "The start point is at the end of the timeline. Mark it on an earlier frame: the search changes the "
+                 "frames after it.");
         return -1;
     }
     if (npoints == 0) {
         snprintf(search.message, sizeof(search.message), "Add an end point first.");
         return -1;
+    }
+    for (i = 0; i < npoints; i++) {
+        if (points[i].frame <= startFrame) {
+            snprintf(search.message, sizeof(search.message),
+                     "Point %d is at frame %ld, not after the start point (frame %ld). Mark the points after the start.",
+                     i + 1, points[i].frame, startFrame);
+            return -1;
+        }
     }
     for (i = 0; i < npoints; i++) {
         if (points[i].frame > last) {
@@ -1105,27 +1235,30 @@ int studio_start_search(int workers, double seconds, const char *limits) {
         return -1;
     }
     snprintf(path, sizeof(path), "%sstudio", base);
-    make_dir(path);
+    make_dir_utf8(path);
+    /* The first number whose folder can be made: the folders of earlier searches stay. The search's files go
+       through the UTF-8 helpers, so a preference folder with other letters (such as é) works on Windows too. */
     for (i = 1; i < 10000; i++) {
-        struct stat st;
-
         snprintf(search.folder, sizeof(search.folder), "%sstudio/search-%04d", base, i);
-        if (stat(search.folder, &st) != 0) {
+        if (make_dir_utf8(search.folder) == 0) {
             break;
         }
     }
     SDL_free(base);
-    if (make_dir(search.folder) != 0) {
+    if (i == 10000) {
         snprintf(search.message, sizeof(search.message), "Cannot make the folder %.200s", search.folder);
+        search.folder[0] = 0;
         return -1;
     }
+    /* A new search: the take of the old one can no longer be undone. */
+    drop_undo();
     /* The start state, saved at the start frame. */
     seek_now(startFrame);
     engine_state_info(engine, &info);
     state = malloc(info.total);
     memset(state, 0, ENGINE_STATE_HEADER);
     snprintf(path, sizeof(path), "%s/start.state", search.folder);
-    f = fopen(path, "wb");
+    f = open_utf8(path, "wb");
     if (state == NULL || f == NULL || fwrite(state, 1, engine_save(engine, state), f) == 0) {
         free(state);
         if (f != NULL) {
@@ -1140,7 +1273,7 @@ int studio_start_search(int workers, double seconds, const char *limits) {
     seek_now(back);
     /* The base run: the timeline's frames from the start, as whole frames from the state. */
     snprintf(path, sizeof(path), "%s/base.events", search.folder);
-    f = fopen(path, "w");
+    f = open_utf8(path, "w");
     if (f == NULL) {
         snprintf(search.message, sizeof(search.message), "Cannot write %.200s", path);
         return -1;
@@ -1154,7 +1287,7 @@ int studio_start_search(int workers, double seconds, const char *limits) {
     }
     fclose(f);
     snprintf(path, sizeof(path), "%s/search.json", search.folder);
-    f = fopen(path, "w");
+    f = open_utf8(path, "w");
     if (f == NULL) {
         snprintf(search.message, sizeof(search.message), "Cannot write %.200s", path);
         return -1;
@@ -1188,6 +1321,11 @@ int studio_start_search(int workers, double seconds, const char *limits) {
         return -1;
     }
     searchStart = startFrame;
+    searchStartTicks = SDL_GetTicks();
+    search.seconds = 0.0;
+    search.tries = 0;
+    search.timeLimit = seconds;
+    search.baseFrame = -2;
     search.running = 1;
     search.haveBest = 0;
     search.bestFrame = -1;
@@ -1210,9 +1348,94 @@ void studio_stop_search(void) {
         return;
     }
     snprintf(path, sizeof(path), "%s/stop", search.folder);
-    f = fopen(path, "w");
+    f = open_utf8(path, "w");
     if (f != NULL) {
         fclose(f);
+    }
+}
+
+/* The first line of a "best FRAME PROGRESS LOADS" file as a timeline frame (-1: the end point is not reached), or -2
+   when the file has none yet. */
+static long score_frame(const char *path, int *loads) {
+    size_t n;
+    char *text = (char *)read_utf8(path, &n);
+    long frame;
+    double progress;
+    long out = -2;
+
+    *loads = 0;
+    if (text == NULL) {
+        return -2;
+    }
+    text = realloc(text, n + 1);
+    text[n] = 0;
+    if (memchr(text, '\n', n) != NULL && sscanf(text, "best %ld %lf %d", &frame, &progress, loads) >= 2) {
+        out = frame != 0x7FFFFFFFL ? searchStart + frame + 1 : -1;
+    }
+    free(text);
+    return out;
+}
+
+/* The search's time and tries, from the workers' status files ("TRIES SECONDS"), the score of the player's own
+   route (the first line that worker 0 writes is the score of the base inputs), and the last line of search.log
+   when the search ended without a result. */
+static void poll_progress(void) {
+    char path[1100];
+    long tries = 0;
+    int i;
+
+    if (search.running) {
+        search.seconds = (SDL_GetTicks() - searchStartTicks) / 1000.0;
+    }
+    for (i = 0; i < 256; i++) {
+        size_t n;
+        char *text;
+        long count;
+        double secs;
+
+        snprintf(path, sizeof(path), "%s/worker-%d.status", search.folder, i);
+        text = (char *)read_utf8(path, &n);
+        if (text == NULL) {
+            break;
+        }
+        text = realloc(text, n + 1);
+        text[n] = 0;
+        if (sscanf(text, "%ld %lf", &count, &secs) == 2) {
+            tries += count;
+        }
+        free(text);
+    }
+    search.tries = tries;
+    if (search.baseFrame == -2) {
+        snprintf(path, sizeof(path), "%s/worker-0.txt", search.folder);
+        search.baseFrame = score_frame(path, &search.baseLoads);
+    }
+    if (!search.running && !search.haveBest && search.message[0] == 0) {
+        /* The search ended without a result: its log's last line says why. */
+        size_t n;
+        char *text;
+
+        snprintf(path, sizeof(path), "%s/search.log", search.folder);
+        text = (char *)read_utf8(path, &n);
+        if (text != NULL) {
+            char *end;
+            char *start;
+
+            text = realloc(text, n + 1);
+            text[n] = 0;
+            end = text + n;
+            while (end > text && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) {
+                end--;
+            }
+            *end = 0;
+            start = end;
+            while (start > text && start[-1] != '\n' && start[-1] != '\r') {
+                start--;
+            }
+            snprintf(search.message, sizeof(search.message), "The search ended without a result: %s",
+                     start[0] ? start : "(search.log is empty)");
+            free(text);
+        }
     }
 }
 
@@ -1230,8 +1453,9 @@ static void poll_search(void) {
     EngineInput *in;
 
     search.running = searchProc >= 0 && proc_running(searchProc);
+    poll_progress();
     snprintf(path, sizeof(path), "%s/best.txt", search.folder);
-    text = (char *)read_file(path, &n);
+    text = (char *)read_utf8(path, &n);
     if (text == NULL) {
         return;
     }
@@ -1282,7 +1506,8 @@ void studio_search_info(StudioSearchInfo *info) {
     Uint32 now = SDL_GetTicks();
     int had = search.haveBest;
 
-    if (search.folder[0] != 0 && (search.running || !had) && now - lastPoll > 500) {
+    if (search.folder[0] != 0 && searchProc >= 0 && (search.running || !had || search.baseFrame == -2)
+        && now - lastPoll > 500) {
         lastPoll = now;
         poll_search();
         if (!had && search.haveBest) {
@@ -1301,14 +1526,19 @@ void studio_take_result(void) {
     if (best == NULL || searchStart > length) {
         return;
     }
-    free(undoInputs);
-    undoInputs = malloc((length > 0 ? length : 1) * sizeof(EngineInput));
     if (undoInputs == NULL) {
-        return;
+        /* The first take of this search keeps the timeline from before it. A later take replaces the taken inputs
+           and keeps that undo. */
+        undoInputs = malloc((length > 0 ? length : 1) * sizeof(EngineInput));
+        if (undoInputs == NULL) {
+            return;
+        }
+        memcpy(undoInputs, inputs, length * sizeof(EngineInput));
+        undoLength = length;
+        undoStart = searchStart;
     }
-    memcpy(undoInputs, inputs, length * sizeof(EngineInput));
-    undoLength = length;
-    undoStart = searchStart;
+    search.takenFrame = search.bestFrame;
+    search.takenLoads = search.bestLoads;
     /* The best inputs over the window; after it the old timeline, as the search played it. The timeline ends where
        the end point is reached, or after the window. */
     newLength = search.bestFrame >= 0 ? search.bestFrame : searchStart + bestLength;
@@ -1346,9 +1576,270 @@ void studio_undo_take(void) {
     memcpy(inputs, undoInputs, undoLength * sizeof(EngineInput));
     length = undoLength;
     studio_request_seek(undoStart);
-    free(undoInputs);
-    undoInputs = NULL;
-    undoStart = -1;
+    drop_undo();
+}
+
+int studio_has_work(void) {
+    return startFrame >= 0 || npoints > 0 || (searchProc >= 0 && proc_running(searchProc)) || best != NULL
+           || undoInputs != NULL;
+}
+
+/* The files that a search writes in its folder (bruteforce/src/search.c and studio_start_search). */
+static void remove_search_folder(const char *folder) {
+    static const char *const files[] = { "start.state", "base.events", "search.json", "search.log", "best.txt",
+                                         "log.txt", "stop", NULL };
+    static const char *const kinds[] = { "txt", "status", "done", NULL };
+    char path[1200];
+    int i, k;
+
+    for (i = 0; files[i]; i++) {
+        snprintf(path, sizeof(path), "%s/%s", folder, files[i]);
+        remove_utf8(path, 0);
+    }
+    for (i = 0; i < 256; i++) {
+        for (k = 0; kinds[k]; k++) {
+            snprintf(path, sizeof(path), "%s/worker-%d.%s", folder, i, kinds[k]);
+            remove_utf8(path, 0);
+        }
+    }
+    remove_utf8(folder, 1);
+}
+
+/* Calls fn for every search folder that exists, with its path. */
+static int each_search_folder(void (*fn)(const char *folder, void *user), void *user) {
+    char *base = SDL_GetPrefPath("weemitt", "Glover");
+    char folder[1100];
+    char probe[1200];
+    int count = 0;
+    int i;
+
+    if (base == NULL) {
+        return 0;
+    }
+    for (i = 1; i < 10000; i++) {
+        FILE *f;
+
+        snprintf(folder, sizeof(folder), "%sstudio/search-%04d", base, i);
+        /* Every search folder holds search.json or start.state (a failed start may hold only that). */
+        snprintf(probe, sizeof(probe), "%s/start.state", folder);
+        f = open_utf8(probe, "rb");
+        if (f == NULL) {
+            snprintf(probe, sizeof(probe), "%s/search.json", folder);
+            f = open_utf8(probe, "rb");
+        }
+        if (f != NULL) {
+            fclose(f);
+            fn(folder, user);
+            count++;
+        }
+    }
+    SDL_free(base);
+    return count;
+}
+
+static void delete_if_old(const char *folder, void *user) {
+    int *n = (int *)user;
+
+    if (search.folder[0] == 0 || strcmp(folder, search.folder) != 0) {
+        remove_search_folder(folder);
+        (*n)++;
+    }
+}
+
+int studio_delete_old_searches(void) {
+    int n = 0;
+
+    /* The latest search, running or not, keeps its folder. */
+    each_search_folder(delete_if_old, &n);
+    plog_printf("studio: removed %d old search folders", n);
+    return n;
+}
+
+static void add_size(const char *folder, void *user) {
+    double *bytes = (double *)user;
+    char path[1200];
+    FILE *f;
+
+    snprintf(path, sizeof(path), "%s/start.state", folder);
+    f = open_utf8(path, "rb");
+    if (f != NULL) {
+        fseek(f, 0, SEEK_END);
+        *bytes += (double)ftell(f);
+        fclose(f);
+    }
+}
+
+int studio_search_folders(double *megabytes) {
+    double bytes = 0.0;
+    int n = each_search_folder(add_size, &bytes);
+
+    *megabytes = bytes / 1048576.0;
+    return n;
+}
+
+const char *studio_origin(void) {
+    return origin;
+}
+
+const char *studio_routes_folder(void) {
+    static char folder[1024];
+    char *base;
+
+    if (folder[0] != 0) {
+        return folder;
+    }
+    base = SDL_GetPrefPath("weemitt", "Glover");
+    if (base == NULL) {
+        return NULL;
+    }
+    snprintf(folder, sizeof(folder), "%sstudio", base);
+    make_dir_utf8(folder);
+    snprintf(folder, sizeof(folder), "%sstudio/routes/", base);
+    make_dir_utf8(folder);
+    SDL_free(base);
+    return folder;
+}
+
+int studio_list_routes(char (*names)[128], int max) {
+    return list_folder(studio_routes_folder(), ".route", names, max);
+}
+
+/* The path of NAME.route, with the rules of state names. */
+static int route_path(const char *name, char *path, int pathSize, char *err, int errSize) {
+    char statePath[1100];
+    const char *folder = studio_routes_folder();
+    const char *file;
+    size_t n;
+
+    if (folder == NULL) {
+        snprintf(err, errSize, "There is no folder for route files: %s", SDL_GetError());
+        return -1;
+    }
+    if (studio_state_path(name, statePath, sizeof(statePath), err, errSize) != 0) {
+        return -1;
+    }
+    /* The checked name is the state path's file name without .state. */
+    file = statePath + strlen(statePath);
+    while (file > statePath && file[-1] != '/' && file[-1] != '\\') {
+        file--;
+    }
+    n = strlen(file) - 6;
+    snprintf(path, pathSize, "%s%.*s.route", folder, (int)n, file);
+    return 0;
+}
+
+#define ROUTE_MAGIC "# weemitt studio route 1"
+
+int studio_save_route(const char *name, char *err, int errSize) {
+    char path[1200];
+    FILE *f;
+    long k;
+    int ok;
+
+    if (route_path(name, path, sizeof(path), err, errSize) != 0) {
+        return -1;
+    }
+    f = open_utf8(path, "w");
+    if (f == NULL) {
+        snprintf(err, errSize, "Cannot write %s.", path);
+        return -1;
+    }
+    /* The header names the start of the timeline. Each F line is one update's input, as in a search's base.events
+       (bruteforce/README.md). */
+    fprintf(f, "%s\n#origin %s\n#frames %ld\n", ROUTE_MAGIC, origin, length);
+    for (k = 0; k < length; k++) {
+        char line[64];
+
+        input_format(&inputs[k], line, sizeof(line));
+        fprintf(f, "F %s\n", line);
+    }
+    ok = !ferror(f);
+    ok = fclose(f) == 0 && ok;
+    if (!ok) {
+        snprintf(err, errSize, "Cannot write %s.", path);
+        return -1;
+    }
+    plog_printf("studio: saved the route of %ld frames to %s", length, path);
+    return 0;
+}
+
+int studio_load_route(const char *name, char *err, int errSize) {
+    char path[1200];
+    char fileOrigin[64] = "";
+    size_t size;
+    char *text;
+    char *line;
+    EngineInput *in = NULL;
+    long count = 0;
+    long cap = 0;
+    long lineNo = 0;
+
+    if (route_path(name, path, sizeof(path), err, errSize) != 0) {
+        return -1;
+    }
+    text = (char *)read_utf8(path, &size);
+    if (text == NULL) {
+        snprintf(err, errSize, "Cannot read %s.", path);
+        return -1;
+    }
+    text = realloc(text, size + 1);
+    text[size] = 0;
+    if (strncmp(text, ROUTE_MAGIC, strlen(ROUTE_MAGIC)) != 0) {
+        snprintf(err, errSize, "%s is not a route file.", path);
+        free(text);
+        return -1;
+    }
+    for (line = strtok(text, "\r\n"); line != NULL; line = strtok(NULL, "\r\n")) {
+        lineNo++;
+        if (!strncmp(line, "#origin ", 8)) {
+            snprintf(fileOrigin, sizeof(fileOrigin), "%s", line + 8);
+        } else if (line[0] == 'F' && line[1] == ' ') {
+            char perr[64];
+
+            if (count == cap) {
+                EngineInput *grown;
+
+                cap = cap ? cap * 2 : 4096;
+                grown = realloc(in, cap * sizeof(EngineInput));
+                if (grown == NULL) {
+                    free(in);
+                    free(text);
+                    snprintf(err, errSize, "Out of memory for the route.");
+                    return -1;
+                }
+                in = grown;
+            }
+            if (input_parse(line + 2, &in[count], perr, sizeof(perr)) != 0) {
+                snprintf(err, errSize, "%s, line %ld: %s", path, lineNo, perr);
+                free(in);
+                free(text);
+                return -1;
+            }
+            count++;
+        }
+    }
+    free(text);
+    if (strcmp(fileOrigin, origin) != 0) {
+        snprintf(err, errSize, "The route starts at %s, and this timeline at %s. Start the timeline there first.",
+                 fileOrigin[0] ? fileOrigin : "an unknown place", origin);
+        free(in);
+        return -1;
+    }
+    /* The route becomes the timeline from its first frame, which keeps its state. */
+    forget_marks();
+    truncate_at(0);
+    while (inputsCapacity < count) {
+        inputsCapacity = inputsCapacity ? inputsCapacity * 2 : 4096;
+        inputs = realloc(inputs, inputsCapacity * sizeof(EngineInput));
+    }
+    if (count > 0) {
+        memcpy(inputs, in, count * sizeof(EngineInput));
+    }
+    free(in);
+    length = count;
+    studio_request_seek(0);
+    plog_printf("studio: loaded the route %s (%ld frames)", path, count);
+    return 0;
 }
 
 /* Three circles around the centre: in the planes XY, YZ and XZ. */

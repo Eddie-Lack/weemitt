@@ -22,15 +22,21 @@ int studio_command(int argc, char **argv, int *code);
    it cannot. */
 void studio_init(const unsigned char *rom, unsigned long romSize);
 
-/* After port_game_init: the timeline's first state. */
-void studio_started(void);
+/* After port_game_init: the timeline's first state. level is --level (-1: the game starts at power-on). */
+void studio_started(long level);
 
 /* Once for each drawn frame, after the controller is read: the polled buttons and stick. All four C buttons at
    once pause the game, or resume it from the frame on show. While paused, the controller moves on the timeline
    (studio_controls_help) and the game gets nothing. The C buttons of the chord are taken out of the input. */
 void studio_poll(unsigned short *buttons, signed char *x, signed char *y);
-/* Buttons that the platform layer must drop from its pending taps (the chord's, or all while paused). */
+/* Buttons that the platform layer must drop from its pending taps (the chord's, the A that resumed, or all while
+   paused). */
 unsigned short studio_input_mask(void);
+/* The input of update f of the timeline (the update from frame f to frame f + 1). Returns 0 when the timeline does
+   not hold it. */
+int studio_input_at(long f, unsigned short *buttons, signed char *x, signed char *y);
+/* 1 when a take changed the input of update f, and the take can still be undone. */
+int studio_input_changed(long f);
 
 /* 1 while the game's logic waits. */
 int studio_paused(void);
@@ -130,8 +136,16 @@ typedef struct StudioSearchInfo {
     int bestLoads;    /* the loads the best inputs pass before the end point (the level is left) */
     int firstLoads;   /* the same for the first result */
     double progress;  /* when the end point is not reached */
+    long baseFrame;   /* the player's own route: the frame at which it reaches the end point (-1: never; -2: not
+                         known yet) */
+    int baseLoads;
+    long takenFrame;  /* the result on the timeline after a take (-1: none) */
+    int takenLoads;
+    double seconds;   /* how long the search has run */
+    long tries;       /* the tries of all its workers */
+    double timeLimit; /* the search's time limit in seconds (0: none) */
     char folder[512];
-    char message[256];
+    char message[400];
 } StudioSearchInfo;
 /* Starts the search from the start point to the points, with the timeline's inputs after the start as its base.
    limits: what a runner can play, "none", "loose" or "strict" (bruteforce/README.md, "The search"). Returns 0, or
@@ -139,6 +153,21 @@ typedef struct StudioSearchInfo {
 int studio_start_search(int workers, double seconds, const char *limits);
 void studio_stop_search(void);
 void studio_search_info(StudioSearchInfo *info);
+/* 1 when a new timeline would drop work: points, a running search, a result or a take. */
+int studio_has_work(void);
+/* Removes the folders of the earlier searches (studio/search-NNNN), but not the latest one's. Returns how many. */
+int studio_delete_old_searches(void);
+/* The number and the bytes of the search folders in the studio's folder. */
+int studio_search_folders(double *megabytes);
+/* ---- Route files: the timeline's inputs from its first frame, NAME.route in studio/routes/ of the preference
+   folder. They hold no game data, so they can be shared. A route loads on a timeline that starts as it did: at
+   power-on, at the same level, or at the same state file. */
+int studio_save_route(const char *name, char *err, int errSize);
+int studio_load_route(const char *name, char *err, int errSize);
+int studio_list_routes(char (*names)[128], int max);
+const char *studio_routes_folder(void);
+/* Where the timeline starts, as route files name it: "power-on", "level N" or "state HASH". */
+const char *studio_origin(void);
 /* Puts the best inputs on the timeline after the start point, up to the frame they reach the end point, and goes
    to the start point. The timeline before is kept for studio_undo_take. */
 void studio_take_result(void);
