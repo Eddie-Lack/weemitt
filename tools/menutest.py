@@ -5,6 +5,8 @@
 - The command line's options last for one run: a run with --skip-intro, --max-fps and others writes none of them
   to settings.ini.
 - settings.ini puts each value in its section: the keys under [keys], the volumes under [audio].
+- The studio (build/studio/weemitt-studio, when it is built): its windows and its bar lie apart, and inside the game
+  window.
 
 Usage: python3 tools/menutest.py [--rom ROM] [--exe PATH]
 Each run gets its own HOME and XDG_DATA_HOME in a temporary folder.
@@ -50,13 +52,13 @@ def overlap(a, b):
     return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
 
 
-def check_layout(exe, rom, work, size, windows, apart):
+def check_layout(exe, rom, work, size, windows, apart, args=()):
     home = work / f"layout-{size}-{windows.replace(',', '-')}"
     home.mkdir()
     shot = home / "rects.txt"
     r = run(exe, rom, home, {"WEEMITT_MENU_TEST": "200", "WEEMITT_MENU_WINDOWS": windows,
                              "WEEMITT_MENU_SHOT": str(home / "menu.ppm"), "WEEMITT_MENU_RECTS": str(shot),
-                             "WEEMITT_WINDOW_SIZE": size})
+                             "WEEMITT_WINDOW_SIZE": size}, args)
     if r.returncode != 0 or not shot.exists():
         report(False, f"layout {size}: the run failed (exit {r.returncode})")
         return
@@ -105,6 +107,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rom", default=regress.default_rom())
     ap.add_argument("--exe", default=str(ROOT / "build" / "linux" / "weemitt"))
+    ap.add_argument("--studio", default=str(ROOT / "build" / "studio" / "weemitt-studio"),
+                    help="the studio build; its case is skipped when it is missing")
     args = ap.parse_args()
     regress.require_rom(args.rom, "menutest.py")
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
@@ -115,6 +119,11 @@ def main():
         check_layout(args.exe, args.rom, work, "960x720", "graphics,audio,log", True)
         check_layout(args.exe, args.rom, work, "640x480", "graphics,audio,controls,enhancements,cheats,log", False)
         check_settings(args.exe, args.rom, work)
+        if os.path.exists(args.studio):
+            # The studio's windows with the menu open: Points and search, Input, Start a level, States and the bar.
+            check_layout(args.studio, args.rom, work, "1200x850", "level,states", True, ["--level", "13"])
+        else:
+            print(f"skip studio: no {args.studio}")
     print(f"menutest: {failures} failed")
     sys.exit(1 if failures else 0)
 

@@ -19,26 +19,26 @@ line that says so. Keep the ROM outside the repository.
 
 ## Every tool
 
-| Tool | What it checks | Needs | Time |
-| --- | --- | --- | --- |
-| `tools/regress.py check` | the logic at the original timing, against the baseline | ROM | about 1 minute |
-| `tools/dtcheck.py LEVEL...` | the same level at dt 1 and a shorter dt | ROM | seconds a level |
-| `tools/tapcheck.py` | short presses of L on the ball | ROM | seconds |
-| `tools/menutest.py` | where the menu's windows open, and settings.ini | ROM, a display (Xvfb works) | about 1 minute |
-| `tools/hostworld/hwtest.py` | the host world (below) | ROM | a few minutes |
-| `make libcheck` (`tools/libcheck.py`) | the library and its test host | ROM | several minutes |
-| `make check` | the pointer slots and the displaced build (port64.md) | ROM, pyelftools | several minutes |
-| `tools/ptrdiff.py` | the displaced build's memory against the headless build's | ROM | a minute |
-| `tools/check_calls.py`, `tools/check_layouts.py`, `tools/check_ptr_slots.py`, `tools/list_pointers.py` | calls, structure layouts and pointers | pyelftools; clang for the layouts | a minute |
-| `tools/cmpcode.py A B` | the machine code of two trees of object files, function by function | pyelftools | seconds |
-| `tools/cfunc.py` | prints or replaces one C function's definition | nothing | seconds |
-| `tools/inputtest/build.sh`, `tools/mustest/build.sh` | the input latch; the sound player's heap | nothing | seconds |
-| `tools/audiotest/build.sh`, `tools/audiotest/render.sh` | the audio commands; rendered songs | ROM for the full test | under a minute |
-| `tools/studio_states.py` | a studio state file saved and loaded in a new process plays as the straight run | ROM, the studio build | a minute |
-| `WEEMITT_STUDIO_SELFTEST=1` with the studio (studio.md) | going to frames of the timeline | ROM, the studio build | seconds |
-| `tools/n64ref/` | the port against the N64 in an emulator (n64-comparison.md) | ROM, gloveworld's emulator | 20 minutes |
-| `bruteforce/tests/run.py` | the brute forcer's engine | ROM | a few minutes |
-| `bruteforce/tests/sync.py` | the engine against the ROM in BizHawk | ROM, BizHawk | long |
+| Tool | What it checks | Needs |
+| --- | --- | --- |
+| `tools/regress.py check` | the logic at the original timing, against the baseline | ROM |
+| `tools/dtcheck.py LEVEL...` | the same level at dt 1 and a shorter dt | ROM |
+| `tools/tapcheck.py` | short presses of L on the ball | ROM |
+| `tools/menutest.py` | where the menu's windows open, and settings.ini | ROM, a display (Xvfb works) |
+| `tools/hostworld/hwtest.py` | the host world (below) | ROM |
+| `make libcheck` (`tools/libcheck.py`) | the library and its test host | ROM |
+| `make check` | the pointer slots and the displaced build (port64.md) | ROM, pyelftools |
+| `tools/ptrdiff.py` | the displaced build's memory against the headless build's | ROM |
+| `tools/check_calls.py`, `tools/check_layouts.py`, `tools/check_ptr_slots.py`, `tools/list_pointers.py` | calls, structure layouts and pointers | pyelftools; clang for the layouts |
+| `tools/cmpcode.py A B` | the machine code of two trees of object files, function by function | pyelftools |
+| `tools/cfunc.py` | prints or replaces one C function's definition | nothing |
+| `tools/inputtest/build.sh`, `tools/mustest/build.sh` | the input latch; the sound player's heap | nothing |
+| `tools/audiotest/build.sh`, `tools/audiotest/render.sh` | the audio commands; rendered songs | ROM for the full test |
+| `tools/studio_states.py` | a studio state file saved and loaded in a new process plays as the straight run | ROM, the studio build |
+| `WEEMITT_STUDIO_SELFTEST=1` with the studio (studio.md) | going to frames of the timeline | ROM, the studio build |
+| `tools/n64ref/` | the port against the N64 in an emulator (n64-comparison.md) | ROM, gloveworld's emulator |
+| `bruteforce/tests/run.py` | the brute forcer's engine | ROM |
+| `bruteforce/tests/sync.py` | the engine against the ROM in BizHawk | ROM, BizHawk |
 
 ## The headless mode
 

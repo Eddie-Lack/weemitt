@@ -2223,6 +2223,7 @@ static void protect_ram_guard(void) {
 
 static SDL_Window *mainWindow;
 static Settings *mainSettings;
+static int testWindowSize; /* WEEMITT_WINDOW_SIZE: the window's size is a test's, not the player's */
 
 int port_fullscreen(void) {
     return mainWindow != NULL && (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
@@ -2242,7 +2243,8 @@ static void note_window_place(void) {
     int x, y, w, h;
     Uint32 flags = SDL_GetWindowFlags(mainWindow);
 
-    if (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)) {
+    if (testWindowSize
+        || (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED))) {
         return;
     }
     SDL_GetWindowPosition(mainWindow, &x, &y);
@@ -2538,6 +2540,7 @@ int main(int argc, char **argv) {
             startH = 720;
         }
         startX = startY = SDL_WINDOWPOS_CENTERED;
+        testWindowSize = 1;
     }
     window = SDL_CreateWindow(rec_active() ? (opt.spaceDemo ? "Glover: Space demo [REC]" : "Glover [REC]")
                                            : (opt.spaceDemo ? "Glover: Space demo" : "Glover"), startX, startY, startW, startH,

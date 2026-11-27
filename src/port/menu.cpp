@@ -115,6 +115,7 @@ struct Placed {
     ImVec2 pos, size;
     long frame;   /* the last frame it was drawn */
     int pending;  /* frames to wait before it is placed: its size is known after its first frame */
+    bool done;    /* placed once: later it keeps the place it was given or dragged to, inside the game window */
 };
 Placed placed[24];
 int placedCount;
@@ -176,10 +177,11 @@ void place_window(const char *name, ImVec2 preferred) {
     if (e == NULL) {
         return;
     }
-    if (ImGui::IsWindowAppearing() || e->frame < frameCount - 1) {
+    if (!e->done && e->pending == 0) {
         e->pending = 2;
     }
     if (e->pending > 0 && --e->pending == 0) {
+        e->done = true;
         ImVec2 at = ImVec2(preferred.x, preferred.y < top ? top : preferred.y);
         bool found = at.x + size.x <= ds.x && at.y + size.y <= ds.y && !overlaps_other(e, at, size);
 
@@ -1054,15 +1056,23 @@ void studio_search_window() {
         ImGui::TextDisabled("%s", si.folder);
     }
     {
-        double mb;
-        int n = studio_search_folders(&mb);
+        /* The folders are counted when the window appears and when a search starts or ends: the count looks at
+           many file names. */
+        static int folders = -1;
+        static double mb;
+        static bool wasRunning;
 
-        if (n > 1 && !si.running) {
+        if (folders < 0 || ImGui::IsWindowAppearing() || wasRunning != (si.running != 0)) {
+            folders = studio_search_folders(&mb);
+            wasRunning = si.running != 0;
+        }
+        if (folders > 1 && !si.running) {
             if (confirm_button("Delete old searches", "Delete the folders of the earlier searches?", "Delete them")) {
                 studio_delete_old_searches();
+                folders = -1;
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("%d folders, %.0f MB", n, mb);
+            ImGui::TextDisabled("%d folders, %.0f MB", folders, mb);
         }
     }
     ImGui::PopTextWrapPos();
