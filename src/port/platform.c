@@ -1373,7 +1373,7 @@ static int print_tick_trace(long frame) {
         port_game_trace(line, sizeof(line));
     }
     if (opt.hashRam && frame % opt.hashRam == 0) {
-        printf("frame %ld %s hash %08x\n", frame, line, port_hash_ram());
+        printf("frame %ld%s%s hash %08x\n", frame, line[0] ? " " : "", line, port_hash_ram());
     } else if (opt.trace) {
         printf("frame %ld %s\n", frame, line);
     }

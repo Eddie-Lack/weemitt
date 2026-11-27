@@ -21,7 +21,14 @@ work for the 32-bit build; the Makefile copies their one architecture-specific h
 the 32-bit runtime library. On other distributions, install the 32-bit SDL2 library and set `SDL_CFLAGS` and
 `SDL_LIBS` on the make command line.
 
-`make RENDERER=null` builds without the renderer, for headless tests.
+`make headless` builds the test build without the renderer, in `build/headless`. `make RENDERER=null` builds without
+the renderer into `build/linux`; a later `make` links the program with its renderer again.
+
+The tools are Python 3 programs. `make gen`, `make check`, `check_layouts.py`, `check_ptr_slots.py`,
+`list_pointers.py` and `cmpcode.py` also need pyelftools (`python3 -m venv .venv && .venv/bin/pip install
+pyelftools`), and `check_layouts.py` needs clang. `PYTHON=.venv/bin/python` tells `make gen` and `make check` which
+Python to use. By default they use gloveworld's virtual environment when it exists, and `python3` otherwise.
+testing.md lists every tool and what it needs.
 
 Every build needs a C++ compiler: `g++ -m32` on Linux and `i686-w64-mingw32-g++` for Windows. The game's files
 (`src/game/*.c`), the sound player (`src/audio`) and the runtime's files in `PORT_CXX_SRCS` are C compiled as C++,
@@ -44,13 +51,20 @@ Cross-compile from Linux with MinGW:
 
 ```sh
 sudo apt-get install mingw-w64 g++-mingw-w64-i686 cmake ninja-build
-tools/build_sdl_mingw.sh        # builds SDL2 for 32-bit Windows into deps/SDL2-mingw
+tools/build_sdl_mingw.sh        # builds SDL2 for 32-bit Windows into deps/SDL2-mingw (git clones SDL)
 make windows -j4                # build/windows/weemitt.exe
 cp deps/SDL2-mingw/i686-w64-mingw32/bin/SDL2.dll build/windows/
 ```
 
-With MSYS2 on Windows, the MINGW32 environment's `mingw-w64-i686-gcc` and `mingw-w64-i686-SDL2` packages provide
-the same; pass `SDL_PREFIX=/mingw32` to `make windows`.
+Without SDL2 for MinGW, `make windows` stops with a message that names the script. With MSYS2 on Windows, the
+MINGW32 environment's `mingw-w64-i686-gcc` and `mingw-w64-i686-SDL2` packages provide the same; pass
+`SDL_PREFIX=/mingw32` to `make windows`.
+
+The Windows program is a window program. Started from a console, it writes its messages (`--help`, `--trace`) to
+that console, unless they are redirected to a file. This has not been checked on Windows itself.
+
+The Build workflow (`.github/workflows/build.yml`) builds the Linux and the Windows program on every push and keeps
+them as build artifacts on the run's page.
 
 ## 64-bit builds
 
@@ -88,10 +102,13 @@ the 32-bit library, DLL and test hosts. [library.md](library.md) describes the l
 
 ## Running
 
-The program looks for the ROM next to itself and in the working directory, under the names `glover.z64`,
-`Glover.z64`, `baserom.us.z64` and a few others, or takes `--rom FILE`. It accepts `.z64`, `.v64` and `.n64` byte
-orders. Saves go to the user's data folder (SDL's preference path, `weemitt/Glover/eeprom.bin`; Ballworld mode uses `eeprom-ballworld.bin`, see [menu.md](menu.md)). The menu's
-settings go to `settings.ini` in the same folder (see [menu.md](menu.md)).
+[playing.md](playing.md) is the guide for players: the ROM, the keys and the save folder. The program looks for the
+ROM next to itself and in the working directory: first under the names `baserom.us.z64`, `glover.z64`, `Glover.z64`
+and a few others, then any file that ends in `.z64`, `.v64` or `.n64` and whose header is Glover (USA). It also takes
+`--rom FILE`. It accepts the `.z64`, `.v64` and `.n64` byte orders. Saves go to the user's data folder (SDL's
+preference path: `~/.local/share/weemitt/Glover/eeprom.bin` on Linux, `%APPDATA%\weemitt\Glover\eeprom.bin` on
+Windows; Ballworld mode uses `eeprom-ballworld.bin`, see [menu.md](menu.md)). The menu's settings go to
+`settings.ini` in the same folder (see [menu.md](menu.md)).
 
 ## The Space demo
 
@@ -106,7 +123,7 @@ runs the demo with `--space-demo`. The code is in `src/port/spacedemo.c`. The de
   (`player.levelFrames`), from the level's start to the glove reaching its exit. It stops while the game is paused;
 - uses medium difficulty, with the easy difficulty's ball controls: the controls are not reversed while the glove
   stands on the ball;
-- does not run out of lives (the game's own cheat bit 8). Quitting from the pause menu, or pressing A on the screen
+- does not run out of lives (the game's own cheat 3, INFINITE LIVES: `cheatActivated` holds the value 8). Quitting from the pause menu, or pressing A on the screen
   of times, starts the run again in Space 1.
 
 ## Regenerating the tables

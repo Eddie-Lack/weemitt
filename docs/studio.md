@@ -22,30 +22,54 @@ The game plays as in the normal program, with these differences:
   cannot replay. The menu has a Studio menu instead.
 - The save file is not written. The game's save stays in memory.
 
-| Control | What it does |
-| --- | --- |
-| All four C buttons together | pause, or play on from the frame on show |
-| While paused: D-pad left or right | a frame back or on (hold to repeat) |
-| While paused: L or R | a second (20 frames) back or on |
-| While paused: A | play on from here with your input; the frames after this one are dropped |
-| While paused: B | play the recording from here; it pauses at its end |
-| The studio bar (while paused, or with the menu open) | drag the timeline, step, jump to the start or the end |
-| Menu, Studio, Start a level | starts a level directly; the timeline starts again from there |
+| Control | Default keys | What it does |
+| --- | --- | --- |
+| All four C buttons together | I, J, K and L | pause, or play on from the frame on show |
+| While paused: D-pad left or right | F or H | a frame back or on (hold to repeat) |
+| While paused: L or R | Q or E | a second (20 frames) back or on |
+| While paused: A | Space | play on from here with your input; the frames after this one are dropped |
+| While paused: B | X | play the recording from here; it pauses at its end |
+| The studio bar (while paused, or with the menu open) | the mouse | drag the timeline, step, jump to the start or the end |
+| Menu, Studio, Start a level | the mouse | starts a level directly; the timeline starts again from there |
 
-A step on at the end of the timeline adds a frame with no buttons held.
+The bar's help line names the keys as they are bound now. A step on at the end of the timeline adds a frame with no
+buttons held. The A that plays on is the studio's: the game gets A again only after it has been released, so play
+does not go on with a jump. Short key taps work while paused. Start a level keeps the pause: while paused, one frame
+runs at once and the level's first frame shows.
+
+The Studio menu shows or hides the studio's windows: Points and search, Input, Start a level and Save and load
+states. `settings.ini` keeps the choice (`[studio]`). A window that is shown opens where no other window is, and
+stays inside the game window.
+
+The Input window shows the stick and the buttons of the update that led to the frame on show, and of the next one.
+An input that a take changed is drawn in orange while the take can be undone. Step through a found result with it
+to learn what to press.
+
+Quitting the studio stops a search that runs.
 
 ## State files
 
 A state file holds the game at one frame. Menu, Studio, **Save and load states** opens the States window.
 
 - **Save state** writes the frame on show to a file. Type a name first. The name can hold letters, digits, spaces,
-  `-`, `_` and `.`. Windows device names (CON, PRN, AUX, NUL, COM0 to COM9, LPT0 to LPT9) are refused. A state of
+  `-`, `_` and `.`. It cannot start with `.` or a space, and spaces at its end are left out. Windows device names (CON, PRN, AUX, NUL, COM0 to COM9, LPT0 to LPT9) are refused. A state of
   the same name is replaced, and the window warns of that. On Windows the warning ignores the case of the name.
 - **Load state** loads the state picked in the list. It becomes frame 0 of a new timeline, as **Start a level**
   does, and the game is paused there. Play on from it as from any frame.
 
-A new timeline, from a loaded state or from **Start a level**, forgets the start point, the points, the search's
-result and the take to undo. A search that runs is asked to stop.
+A new timeline, from a loaded state, a route or **Start a level**, forgets the start point, the points, the search's
+result and the take to undo. A search that runs is asked to stop. When there is such work, the studio asks first.
+
+## Route files
+
+A route holds the timeline's inputs from its first frame. It holds no game data, so it can be shared. In the States
+window, type a name and press **Save the route**. The file is `NAME.route` in `studio/routes` of the preference
+folder. Its first lines name where the timeline starts: `power-on`, `level N` (from `--level` or Start a level) or
+`state HASH` (a loaded state file). Each `F` line is one update's input, as in a search's `base.events`
+(`bruteforce/README.md`).
+
+**Load the route** puts the route on the timeline from its first frame, and goes to frame 0, paused. Press B to watch
+it. A route loads only on a timeline that starts where the route starts: start that level, or load that state, first.
 
 The files are `NAME.state` in the folder `studio/states` of the program's preference folder (on Windows
 `%APPDATA%\weemitt\Glover\studio\states`). The window shows the folder. A state file can also be put there by
@@ -88,14 +112,22 @@ The Points and search window shows with the studio bar.
    left) counts 70 frames: a console takes about 3.5 seconds for it, and the game here takes one frame. Workers: how many processes search (0: one per logical
    processor). Input limits: what a runner can play. **strict** (the default) keeps every press and every gap
    between presses at least 3 frames long and the stick's change to 48 a frame; **loose** 2 frames and 96;
-   **none** allows any input on any frame. **Stop the search** ends it.
+   **none** allows any input on any frame. Time limit: the search stops by itself after that many minutes (none by
+   default). **Stop the search** ends it. The window shows the time and the tries a second, and "Your route": the
+   frame at which the inputs you played reach the end point. A point must lie after the start point. A "level is
+   done" point needs a route that already ends the level: the window says so when the level is not done at its
+   frame. When the search ends without a result, the window shows the reason from `search.log`.
 4. **Take the result** puts the best inputs on the timeline from the start point to the frame they reach the end
    point, and goes to the start point. Press B to watch it, or go to any frame of it and play on from there.
-   **Undo the take** brings back the timeline from before.
+   **Undo the take** brings back the timeline from before the first take of this search. After a take the window
+   says which result is on the timeline. A later take of the same search keeps the undo. Playing on, or a new
+   search, drops it.
 
 A search lives in a folder of its own, `studio/search-NNNN` in the program's preference folder (on Windows
 `%APPDATA%\weemitt\Glover\studio`). It holds the start state, the run, the config, the search's results
-(`best.txt`, `log.txt`) and its output (`search.log`). The state holds the game's memory: do not share it.
+(`best.txt`, `log.txt`) and its output (`search.log`). The state holds the game's memory: do not share it. Each
+folder holds a state of about 5 MB. **Delete old searches** removes every search folder but the latest one's. On
+Windows the studio writes these files with the system's UTF-16 file names.
 
 ## Checking a strat on a console
 

@@ -59,8 +59,9 @@ make -j4                      # build/linux/weemitt (needs gcc-multilib and the 
 make headless -j4             # the test build (build/headless): no renderer, the stand-in sound player
 make windows                  # build/windows/weemitt.exe (needs MinGW and deps/SDL2-mingw, see docs/building.md)
 make libcheck                 # the game as a library (build/lib64/libglover.so) and its checks, docs/library.md
-python3 tools/regress.py check            # logic unchanged at the original timing?
-python3 tools/dtcheck.py 5 20 attract     # same behaviour at dt 0.25?
+python3 tools/regress.py check            # logic unchanged at the original timing? (set GLOVER_ROM)
+python3 tools/dtcheck.py 5 20 attract     # same behaviour at dt 0.25? (exits 1 today: testing.md says why)
+python3 tools/menutest.py                 # the menu's windows and settings.ini, in a window (needs a display)
 ./build/headless/weemitt --rom ROM --headless 600 --level 5 --trace   # one level, state per frame
 ```
 
@@ -74,3 +75,7 @@ python3 tools/dtcheck.py 5 20 attract     # same behaviour at dt 0.25?
 | `tools/cfunc.py` | prints or replaces one C function definition |
 | `tools/libcheck.py` | checks the library (`make libcheck`, [docs/library.md](docs/library.md)): exports, imports, and the test host's runs |
 | `tools/gen/` | regenerates `gen/` from a gloveworld checkout (`make gen`) |
+| `tools/menutest.py` | where the menu's windows open, and that settings.ini keeps no one-run option |
+
+The tools find the ROM through `GLOVER_ROM` or `--rom`. [docs/testing.md](docs/testing.md) lists every tool and what
+it needs.

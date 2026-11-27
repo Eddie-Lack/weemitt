@@ -689,16 +689,16 @@ Other decisions:
 
 ## Verification
 
-- `make headless -j4` builds the test binary. The Makefile does not track headers: after a header change, touch the
-  `.c` files that include it or remove `build/headless`.
+- `make headless -j4` builds the test binary. The game's files track their headers (`-MMD`). The runtime's files in
+  `src/port` list their headers by hand in the Makefile: a new header there needs a line.
 - `python3 tools/regress.py check` must report 0 runs differing after every change. It compares every frame's state
   and a hash of the game's memory with the baseline, at `deltaTime` 1. It covers the attract mode and every level,
   level 40 included.
 - `python3 tools/dtcheck.py LEVEL...` compares a level at `deltaTime` 1 and 0.25 with the same input. It shows
   whether `frameCount` and the speeds of the glove, the ball and the camera agree. A run at a short `deltaTime` can
   take a different path after a small legitimate difference. Judge a level by the first frame where the runs depart
-  and why, not by the speed ratios alone. Running the level with several input seeds helps: a frame-rate error shows
-  with every seed, a chaotic split does not.
+  and why, not by the speed ratios alone. Running the level with several input seeds (`--seed N`) helps: a frame-rate
+  error shows with every seed, a chaotic split does not.
 - The memory hash reads the words in `[PORT_PTR_BASE, +24 MB)` as offsets into `port_ram`: the pointers that the
   game stores (Ptr32 words, see [port64.md](port64.md)). On the normal builds `PORT_PTR_BASE` is the address of
   `port_ram`, so the hash needs `port_ram` at the same address in the build and in the baseline. On Linux
