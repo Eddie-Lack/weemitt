@@ -155,7 +155,7 @@ OUTPUTS = {}
 def main():
     rom_path = P.ROOT / "baserom.us.z64"
     if not rom_path.exists():
-        raise SystemExit(f"gen_ram.py: {rom_path} is missing. The gloveworld checkout needs its ROM (make setup).")
+        raise SystemExit(f"gen_ram.py: {rom_path} is missing")
     types = json.loads((P.GEN / "types.json").read_text())
     tvars = types["vars"]
     funcs_sig = types["funcs"]

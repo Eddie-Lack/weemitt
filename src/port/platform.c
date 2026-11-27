@@ -351,7 +351,7 @@ static void save_failed(const char *what) {
     plog_printf("weemitt: %s", what);
     if (!told) {
         told = 1;
-        menu_notice("The game could not be saved. The log says why.");
+        menu_notice("The game could not be saved.");
     }
 }
 
@@ -832,7 +832,7 @@ static void load_input_script(const char *path, ScriptedInput **script, int *scr
             continue;
         }
         if (sscanf(p, "%ld:%x:%d:%d %7s", &s.frame, &buttons, &s.x, &s.y, rest) != 4) {
-            snprintf(msg, sizeof(msg), "%s:%d: cannot read the line (FRAME:BUTTONS:X:Y, buttons in hex)", path, lineNo);
+            snprintf(msg, sizeof(msg), "%s:%d: cannot read the line", path, lineNo);
             die("%s", msg);
         }
         if (s.frame < 0 || buttons > 0xFFFF || s.x < -128 || s.x > 127 || s.y < -128 || s.y > 127) {
@@ -841,8 +841,7 @@ static void load_input_script(const char *path, ScriptedInput **script, int *scr
             die("%s", msg);
         }
         if (s.frame < lastFrame) {
-            snprintf(msg, sizeof(msg), "%s:%d: frame %ld comes after frame %ld; the lines must be in frame order", path,
-                     lineNo, s.frame, lastFrame);
+            snprintf(msg, sizeof(msg), "%s:%d: frame %ld comes after frame %ld", path, lineNo, s.frame, lastFrame);
             die("%s", msg);
         }
         lastFrame = s.frame;
@@ -1001,7 +1000,7 @@ static void start_recording(const char *path, const Settings *st) {
             die("cannot write the recording %s", path);
         }
         plog_printf("weemitt: cannot write the recording %s", path);
-        menu_notice("The input recording could not start. The log says why.");
+        menu_notice("The input recording could not start.");
         return;
     }
     plog_printf("weemitt: recording the input to %s (%s)", path, info.buildId);
@@ -1827,7 +1826,7 @@ static void bad_usage(const char *fmt, const char *a, const char *b) {
     char line[800];
 
     snprintf(msg, sizeof(msg), fmt, a, b);
-    snprintf(line, sizeof(line), "%s. Run weemitt --help for the options.", msg);
+    snprintf(line, sizeof(line), "%s.", msg);
     die_code(2, line);
 }
 
@@ -2081,8 +2080,7 @@ static void parse_args(int argc, char **argv) {
     }
 #ifdef PORT_RENDERER_NULL
     if (opt.shotCount) {
-        bad_usage("this build has no renderer for --shot, --interp-shot and --interp-check%s%s",
-                  ". Use the window build (build/linux/weemitt) with a display", "");
+        bad_usage("this build has no renderer for --shot, --interp-shot and --interp-check%s%s", "", "");
     }
 #endif
 }
@@ -2437,8 +2435,7 @@ int main(int argc, char **argv) {
     }
     timeBase = SDL_GetPerformanceCounter();
     if (opt.rom == NULL) {
-        die("%s", "No ROM found. Put the Glover (USA) ROM (a .z64, .v64 or .n64 file) next to the program or in the "
-                  "folder you start it from, or pass --rom FILE.");
+        die("%s", "No ROM found. Put the Glover (USA) ROM next to the program as glover.z64, or pass --rom FILE.");
     }
     if (!opt.headlessFrames) {
         plog_printf("weemitt starting, ROM %s", opt.rom);
@@ -2514,8 +2511,7 @@ int main(int argc, char **argv) {
     settings_keep_file(&fileSettings, &settings);
 #if defined(__linux__)
     if (getenv("DISPLAY") == NULL && getenv("WAYLAND_DISPLAY") == NULL) {
-        die("%s", "There is no display: DISPLAY and WAYLAND_DISPLAY are not set. Start the program on the desktop, "
-                  "or use xvfb-run for a run without a screen.");
+        die("%s", "There is no display: DISPLAY and WAYLAND_DISPLAY are not set.");
     }
 #endif
 

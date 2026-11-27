@@ -122,7 +122,7 @@ def main():
     regress.require_rom(args.rom, "dtcheck.py")
     for lv in args.levels:
         if lv != "attract" and not (lv.lstrip("-").isdigit() and 0 <= int(lv) <= 47):
-            sys.exit(f"dtcheck.py: {lv} is not a level: give 0 to 47, or attract")
+            sys.exit(f"dtcheck.py: {lv} is not a level")
     if args.ballworld:
         EXTRA.append("--ballworld")
     if args.exe == str(ROOT / "build" / "headless" / "weemitt"):

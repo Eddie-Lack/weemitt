@@ -1256,7 +1256,7 @@ int search_main(int argc, char **argv) {
             fclose(logf);
         }
         if (bestLine == NULL) {
-            printf("search: the search ended without a result (the workers' messages are above)\n");
+            printf("search: the search ended without a result\n");
             return 1;
         }
     }

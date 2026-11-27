@@ -883,7 +883,7 @@ int studio_state_path(const char *name, char *path, int pathSize, char *err, int
         len--;
     }
     if (len == 0) {
-        snprintf(err, errSize, "Give it a name.");
+        snprintf(err, errSize, "Give the state a name.");
         return -1;
     }
     if (len > 100) {
@@ -928,8 +928,8 @@ int studio_state_exists(const char *name) {
 }
 
 const char *studio_controls_help(void) {
-    return "Paused. D-pad left, right: a frame back or on. L, R: a second back or on. A or all C buttons: play on "
-           "from here. B: play the recording.";
+    return "Paused. D-pad: a frame back or on. L, R: a second back or on. A or all C buttons: play on from here. "
+           "B: play the recording.";
 }
 
 /* A held button acts once, then repeats after a short wait. */
@@ -1115,9 +1115,7 @@ void studio_add_level_end(void) {
         /* gameInfo.exitFlags (the point's condition, see studio_start_search). A search needs a route that already
            ends the level: the point gives it no distance to follow. */
         if (!(engine_read8(engine, engine_symbol("gameInfo") + 0x54) & 2)) {
-            snprintf(search.message, sizeof(search.message),
-                     "The level is not done at frame %ld. The search needs a route that ends the level: mark this "
-                     "point on a frame after the level's exit has started.", cur);
+            snprintf(search.message, sizeof(search.message), "The level is not done at frame %ld.", cur);
         } else {
             search.message[0] = 0;
         }
@@ -1203,9 +1201,7 @@ int studio_start_search(int workers, double seconds, const char *limits) {
         return -1;
     }
     if (startFrame >= length) {
-        snprintf(search.message, sizeof(search.message),
-                 "The start point is at the end of the timeline. Mark it on an earlier frame: the search changes the "
-                 "frames after it.");
+        snprintf(search.message, sizeof(search.message), "The start point is at the end of the timeline.");
         return -1;
     }
     if (npoints == 0) {
@@ -1214,8 +1210,7 @@ int studio_start_search(int workers, double seconds, const char *limits) {
     }
     for (i = 0; i < npoints; i++) {
         if (points[i].frame <= startFrame) {
-            snprintf(search.message, sizeof(search.message),
-                     "Point %d is at frame %ld, not after the start point (frame %ld). Mark the points after the start.",
+            snprintf(search.message, sizeof(search.message), "Point %d is at frame %ld, not after the start point (frame %ld).",
                      i + 1, points[i].frame, startFrame);
             return -1;
         }
@@ -1840,7 +1835,7 @@ int studio_load_route(const char *name, char *err, int errSize) {
     }
     free(text);
     if (strcmp(fileOrigin, origin) != 0) {
-        snprintf(err, errSize, "The route starts at %s, and this timeline at %s. Start the timeline there first.",
+        snprintf(err, errSize, "The route starts at %s, and this timeline at %s.",
                  fileOrigin[0] ? fileOrigin : "an unknown place", origin);
         free(in);
         return -1;
