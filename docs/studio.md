@@ -32,7 +32,7 @@ The game plays as in the normal program, with these differences:
 | The studio bar (while paused, or with the menu open) | the mouse | drag the timeline, step, jump to the start or the end |
 | Menu, Studio, Start a level | the mouse | starts a level directly; the timeline starts again from there |
 
-The bar's help line names the keys as they are bound now. A step on at the end of the timeline adds a frame with no
+A step on at the end of the timeline adds a frame with no
 buttons held. The A that plays on is the studio's: the game gets A again only after it has been released, so play
 does not go on with a jump. Short key taps work while paused. Start a level keeps the pause: while paused, one frame
 runs at once and the level's first frame shows.

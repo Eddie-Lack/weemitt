@@ -97,7 +97,7 @@ EXE := $(BUILD)/weemitt$(if $(filter 1,$(STUDIO)),-studio).exe
 SDL_PREFIX ?= deps/SDL2-mingw/$(MINGW)
 ifeq ($(wildcard $(SDL_PREFIX)/include/SDL2/SDL.h),)
 ifneq ($(LIB),1)
-$(error $(SDL_PREFIX) has no SDL2 for Windows. Run tools/build_sdl_mingw.sh$(if $(filter 64,$(BITS)), x86_64), or set SDL_PREFIX (docs/building.md))
+$(error $(SDL_PREFIX) has no SDL2 for Windows)
 endif
 endif
 SDL_CFLAGS := -I$(SDL_PREFIX)/include -I$(SDL_PREFIX)/include/SDL2

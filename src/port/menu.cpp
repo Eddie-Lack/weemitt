@@ -66,7 +66,7 @@ void save_settings() {
             plog_printf("weemitt: cannot write the settings to %s", cfgPath);
             if (!told) {
                 told = true;
-                show_notice("The settings could not be saved. The log says why.");
+                show_notice("The settings could not be saved.");
             }
         }
     }
@@ -350,9 +350,7 @@ void graphics_window() {
             ImGui::SetTooltip("Smooth: the game logic runs in short steps, once per drawn frame.\n"
                               "Original: the logic runs as on the N64, 20 steps a second in a level and 30 in a menu\n"
                               "(glitches that need whole steps, such as wall clips, work). The picture is drawn at the\n"
-                              "frame rate below and blends the two latest steps. This adds up to one step of delay.\n"
-                              "Original (no blending): the same logic, and each drawn frame shows the latest step, as\n"
-                              "the N64 does. No delay is added. The same as --fixed.");
+                              "frame rate below and blends the two latest steps. This adds up to one step of delay.");
         }
     }
     bool vsync = cfg->vsync != 0;
@@ -380,26 +378,15 @@ void graphics_window() {
     if (ImGui::Checkbox("Full screen", &full)) {
         port_set_fullscreen(full);
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("F11 and Alt+Enter switch it too. The window keeps its size and place for the next start.");
-    }
     bool pauseMenu = cfg->pauseMenu != 0;
     if (ImGui::Checkbox("Pause while the menu is open", &pauseMenu)) {
         cfg->pauseMenu = pauseMenu;
         settingsDirty = true;
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Off: the game keeps running behind the menu, as before.\n"
-                          "On: the game waits while the menu is open. The music goes on.");
-    }
     bool pauseFocus = cfg->pauseUnfocused != 0;
     if (ImGui::Checkbox("Pause when the window loses focus", &pauseFocus)) {
         cfg->pauseUnfocused = pauseFocus;
         settingsDirty = true;
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("The game waits while another window is active. The music goes on.\n"
-                          "Audio, Mute when the window loses focus silences it.");
     }
     ImGui::SeparatorText("Image");
     image_options();
@@ -423,7 +410,7 @@ void audio_window() {
         settingsDirty = true;
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("100%% is the game's own level, which is loud. The program starts at 20%%.");
+        ImGui::SetTooltip("100%% is the game's own level.");
     }
     int music = cfg->musicVolume;
     if (ImGui::SliderInt("Music volume", &music, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
@@ -565,8 +552,6 @@ void controls_window() {
     place_window("Controls", ImVec2(480, 40));
     if (movedText[0] && SDL_GetTicks() < movedUntil) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", movedText);
-    } else {
-        ImGui::TextDisabled("A key belongs to one input: a new binding takes it from the other.");
     }
     if (ImGui::BeginTabBar("controls_tabs")) {
         if (ImGui::BeginTabItem("Keyboard")) {
@@ -730,28 +715,6 @@ const char *const levelNames[] = {
 };
 
 #ifdef PORT_STUDIO
-/* The first key bound to an input, for the studio's help ("" when none). */
-const char *first_key(int input) {
-    for (int s = 0; s < KEY_SLOTS; s++) {
-        if (cfg->keys[input][s] > 0) {
-            return SDL_GetScancodeName((SDL_Scancode)cfg->keys[input][s]);
-        }
-    }
-    return "";
-}
-
-/* The controls while paused, with the keyboard's keys: the help of studio_controls_help with the current keys. */
-const char *studio_key_help() {
-    static char text[400];
-
-    snprintf(text, sizeof(text),
-             "Paused. D-pad left, right (%s, %s): a frame back or on. L, R (%s, %s): a second back or on. "
-             "A (%s) or all C buttons (%s %s %s %s): play on from here. B (%s): play the recording.",
-             first_key(IN_DLEFT), first_key(IN_DRIGHT), first_key(IN_L), first_key(IN_R), first_key(IN_A),
-             first_key(IN_CUP), first_key(IN_CDOWN), first_key(IN_CLEFT), first_key(IN_CRIGHT), first_key(IN_B));
-    return text;
-}
-
 /* A window that the settings keep open or closed: Begin with the setting as its close box. */
 bool begin_kept(const char *name, int *setting, ImGuiWindowFlags flags) {
     bool open = *setting != 0;
@@ -777,8 +740,6 @@ bool new_timeline_ok(const char *id, bool clicked) {
         }
     }
     if (ImGui::BeginPopupModal(id, NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("A new timeline drops the points, the search and its result.");
-        ImGui::TextUnformatted("States, Save the route keeps the route first.");
         if (ImGui::Button("Go on")) {
             go = true;
             ImGui::CloseCurrentPopup();
@@ -857,7 +818,7 @@ void studio_bar() {
              in.frame * port_game_retraces() / 60.0, in.states, in.megabytes);
     ImGui::TextUnformatted(text);
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", in.paused ? studio_key_help() : "All C buttons together: pause.");
+    ImGui::TextDisabled("%s", in.paused ? studio_controls_help() : "All C buttons together: pause.");
     ImGui::PopTextWrapPos();
     ImGui::End();
 }
@@ -919,7 +880,6 @@ void studio_input_window() {
         }
         ImGui::NewLine();
     }
-    ImGui::TextDisabled("Orange: a take changed this input.");
     ImGui::End();
 }
 
@@ -1035,9 +995,6 @@ void studio_search_window() {
             }
         } else {
             ImGui::Text("Not reached yet (progress %.1f)", si.progress);
-            if (npoints > 0 && !points[npoints - 1].place) {
-                ImGui::TextDisabled("A 'level is done' point needs a route that ends the level.");
-            }
         }
         if (ImGui::Button("Take the result")) {
             studio_take_result();
@@ -1091,7 +1048,7 @@ void studio_level_window() {
     place_window("Start a level", ImVec2(20, 40));
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
     ImGui::TextWrapped("The level starts at once, as the level select does (medium difficulty, save slot 6). "
-                       "The timeline starts again from there. While paused, its first frame shows and the pause stays.");
+                       "The timeline starts again from there.");
     ImGui::PopTextWrapPos();
     ImGui::SetNextItemWidth(200.0f);
     ImGui::Combo("Level", &levelPick, levelNames, (int)(sizeof(levelNames) / sizeof(levelNames[0])), 12);
@@ -1147,7 +1104,7 @@ void studio_states_window() {
     studio_info(&in);
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
     ImGui::TextUnformatted("A state holds the game's memory at one frame: do not share it. Only this build of the "
-                           "studio loads it. A route holds only the inputs.");
+                           "studio loads it.");
     ImGui::SetNextItemWidth(220.0f);
     ImGui::InputTextWithHint("##name", "name", name, sizeof(name));
     ImGui::SameLine();
@@ -1222,12 +1179,9 @@ void studio_states_window() {
     ImGui::EndDisabled();
     if (new_timeline_ok("Replace the timeline?##route", routeClicked) && routeSelected >= 0) {
         if (studio_load_route(routes[routeSelected], message, sizeof(message)) == 0) {
-            snprintf(message, sizeof(message), "Loaded the route %s. It plays from frame 0: press B.",
-                     routes[routeSelected]);
+            snprintf(message, sizeof(message), "Loaded the route %s.", routes[routeSelected]);
         }
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("It must start where this timeline starts (%s).", studio_origin());
     if (message[0]) {
         ImGui::TextUnformatted(message);
     }
@@ -1255,7 +1209,6 @@ void cheats_window() {
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("In the game's pause menu, R or Z opens a list of all the cheats to switch with A.\n"
-                          "While it is open, the C buttons type no cheat code: B, R or Z closes it.\n"
                           "Off: R and Z do nothing there, as in the original game.");
     }
     ImGui::Separator();
@@ -1267,8 +1220,7 @@ void cheats_window() {
               "The game's OPEN PORTALS and OPEN LEVELS cheats: every portal and bonus level in the hub is open.\n"
               "The save is not changed.");
     cheat_box("Level select", 23, 1, &cfg->levelSelect,
-              "The game's LEVEL SELECT cheat: the title menu gets a level select entry. It has no label:\n"
-              "press Up from START, then A.");
+              "The game's LEVEL SELECT cheat: the title menu shows the level select.");
     ImGui::SeparatorText("Go to level");
     static int levelPick = 0;
     ImGui::SetNextItemWidth(200.0f);
@@ -1286,7 +1238,7 @@ void cheats_window() {
     }
     bool goHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
     if (ImGui::BeginPopupModal("Go to level?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Start %s now? The current level is left without saving.", levelNames[levelPick]);
+        ImGui::Text("Start %s now?", levelNames[levelPick]);
         if (ImGui::Button("Go") && port_goto_possible()) {
             port_goto_level(levelPick);
             ImGui::CloseCurrentPopup();
@@ -1546,10 +1498,8 @@ void developer_window() {
     ImGui::Text("%.1f FPS, %.2f ms a frame", ImGui::GetIO().Framerate,
                 ImGui::GetIO().Framerate > 0.0f ? 1000.0f / ImGui::GetIO().Framerate : 0.0f);
     if (cfg->fpsCap > 0) {
-        ImGui::TextDisabled("Unlimited stops at %d FPS%s", cfg->fpsCap,
-                            cfg->physicsMode != PHYSICS_ORIGINAL ? " (10 times the game's rate)" : "");
-    } else if (cfg->maxFps == 0 && cfg->vsync) {
-        ImGui::TextDisabled("VSync sets the rate.");
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Unlimited is capped at %d FPS%s", cfg->fpsCap,
+                           cfg->physicsMode == PHYSICS_ORIGINAL ? "" : " (10 times the game's rate)");
     }
     ImGui::SeparatorText("Log");
     bool logging = plog_file_active() != 0;

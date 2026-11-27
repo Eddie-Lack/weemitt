@@ -161,15 +161,14 @@ window loop reads it: the frame-rate limit each frame, the key mapping in `read_
   `--replay` (see [testing.md](testing.md#recording-and-replay)). The file holds the save and no ROM data. `--record FILE`
   records one run without the setting.
 - Developer: Show FPS (an overlay) and the frame rate and frame time. When Unlimited is chosen, both show the cap
-  (see the next section). With VSync on and a display slower than the cap, VSync sets the rate and no cap shows. The
+  (see the next section). With VSync on and a display slower than the cap, no cap shows. The
   FPS, PAUSED and REC texts lie under the menu's windows.
 - Developer, Frame step, Show collision and Show object names: see "The Developer tools" below.
 - Developer, Game debug: the debug code that the retail game still holds. See "Game debug" below.
 
 - Settings, Audio: when there is no sound, a line at the top of the window says why (no sound device, `--no-sound`,
   or a build without the sound player).
-- Settings, Audio, Master volume: 0 to 100% of the game's own level, 20% by default. The game's own level is loud next
-  to other programs, and the tooltip says so. The sound callback in
+- Settings, Audio, Master volume: 0 to 100% of the game's own level, 20% by default. The sound callback in
   `platform.c` scales every sample after the sound player has mixed them. The game's logic does not see it.
 - Settings, Audio, Music volume and Effects volume: 0 to 100%, both 100% by default (saved as `music_volume` and
   `effects_volume`). They are shares of the master volume. libmus gives every channel one synthesizer voice, and a

@@ -59,9 +59,9 @@ def default_rom():
 def require_rom(rom, tool):
     """Stops the tool with one line when the ROM is missing."""
     if rom is None:
-        sys.exit(f"{tool}: no ROM. Set GLOVER_ROM to the Glover (USA) ROM, or pass --rom FILE.")
+        sys.exit(f"{tool}: no ROM")
     if not os.path.isfile(rom):
-        sys.exit(f"{tool}: no ROM at {rom}. Set GLOVER_ROM to the Glover (USA) ROM, or pass --rom FILE.")
+        sys.exit(f"{tool}: no ROM at {rom}")
     return rom
 
 # N64 buttons.
@@ -213,9 +213,9 @@ def main():
     known = [r[0] for r in runs(args.frames)]
     unknown = [n for n in args.runs or [] if n not in known]
     if unknown:
-        sys.exit(f"regress.py: no run named {', '.join(unknown)}. The runs are attract and level00 to level47.")
+        sys.exit(f"regress.py: no run named {', '.join(unknown)}")
     if args.mode == "check" and not (OUT / "baseline").is_dir():
-        sys.exit("regress.py: no baseline in build/regress/baseline. Record it first: python3 tools/regress.py baseline")
+        sys.exit("regress.py: no baseline in build/regress/baseline")
     if args.mode == "baseline" and args.exe == str(ROOT / "build" / "headless" / "weemitt"):
         args.exe = build_baseline()
     elif args.exe == str(ROOT / "build" / "headless" / "weemitt"):
@@ -234,7 +234,7 @@ def main():
         if args.mode == "check":
             if not (OUT / "baseline" / f"{name}.trace").exists():
                 failed += status == "ok"
-                line += "; no baseline (record it with: regress.py baseline)"
+                line += "; no baseline"
             else:
                 d = compare(name, OUT / "baseline", dest)
                 if d:

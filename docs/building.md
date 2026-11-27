@@ -56,7 +56,7 @@ make windows -j4                # build/windows/weemitt.exe
 cp deps/SDL2-mingw/i686-w64-mingw32/bin/SDL2.dll build/windows/
 ```
 
-Without SDL2 for MinGW, `make windows` stops with a message that names the script. With MSYS2 on Windows, the
+Without SDL2 for MinGW, `make windows` stops with a message. With MSYS2 on Windows, the
 MINGW32 environment's `mingw-w64-i686-gcc` and `mingw-w64-i686-SDL2` packages provide the same; pass
 `SDL_PREFIX=/mingw32` to `make windows`.
 
