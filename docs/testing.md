@@ -1,5 +1,45 @@
 # Testing
 
+## The ROM
+
+The tests and tools need the Glover (USA) ROM. Set `GLOVER_ROM` to its path, or pass `--rom FILE`. Without either,
+the tools look for `baserom.us.z64` in a gloveworld checkout next to this repository. A tool with no ROM stops with one
+line that says so. Keep the ROM outside the repository.
+
+## A first change
+
+1. Build: `make -j4` and `make headless -j4` (building.md lists the packages).
+2. Record the regression baseline once: `python3 tools/regress.py baseline`. It builds the baseline commit in a git
+   worktree and takes about a minute.
+3. Make the change.
+4. `python3 tools/regress.py check` must say "same as the baseline" for every run. A change of timing also needs
+   `python3 tools/dtcheck.py LEVEL` (delta-time.md). A change of the window or the menu needs
+   `python3 tools/menutest.py` with a display, and a look at the window.
+5. The table below names the tool for each part of the program.
+
+## Every tool
+
+| Tool | What it checks | Needs |
+| --- | --- | --- |
+| `tools/regress.py check` | the logic at the original timing, against the baseline | ROM |
+| `tools/dtcheck.py LEVEL...` | the same level at dt 1 and a shorter dt | ROM |
+| `tools/tapcheck.py` | short presses of L on the ball | ROM |
+| `tools/menutest.py` | where the menu's windows open, and settings.ini | ROM, a display (Xvfb works) |
+| `tools/hostworld/hwtest.py` | the host world (below) | ROM |
+| `make libcheck` (`tools/libcheck.py`) | the library and its test host | ROM |
+| `make check` | the pointer slots and the displaced build (port64.md) | ROM, pyelftools |
+| `tools/ptrdiff.py` | the displaced build's memory against the headless build's | ROM |
+| `tools/check_calls.py`, `tools/check_layouts.py`, `tools/check_ptr_slots.py`, `tools/list_pointers.py` | calls, structure layouts and pointers | pyelftools; clang for the layouts |
+| `tools/cmpcode.py A B` | the machine code of two trees of object files, function by function | pyelftools |
+| `tools/cfunc.py` | prints or replaces one C function's definition | nothing |
+| `tools/inputtest/build.sh`, `tools/mustest/build.sh` | the input latch; the sound player's heap | nothing |
+| `tools/audiotest/build.sh`, `tools/audiotest/render.sh` | the audio commands; rendered songs | ROM for the full test |
+| `tools/studio_states.py` | a studio state file saved and loaded in a new process plays as the straight run | ROM, the studio build |
+| `WEEMITT_STUDIO_SELFTEST=1` with the studio (studio.md) | going to frames of the timeline | ROM, the studio build |
+| `tools/n64ref/` | the port against the N64 in an emulator (n64-comparison.md) | ROM, gloveworld's emulator |
+| `bruteforce/tests/run.py` | the brute forcer's engine | ROM |
+| `bruteforce/tests/sync.py` | the engine against the ROM in BizHawk | ROM, BizHawk |
+
 ## The headless mode
 
 `weemitt --headless FRAMES` runs the game without a window, as fast as it can, and stops after FRAMES original
@@ -8,15 +48,19 @@ result every time.
 
 | Option | Effect |
 | --- | --- |
-| `--level N` | start level N directly, as the level select does (save slot 6, medium difficulty) |
-| `--input FILE` | controller input: lines `FRAME:BUTTONS:X:Y` (buttons in hex, the N64's bits); each line holds until the next |
+| `--level N` | start level N directly, as the level select does (save slot 6, medium difficulty); N is -1 (the normal start) to 47, see "Level numbers" |
+| `--input FILE` | controller input: lines `FRAME:BUTTONS:X:Y` (buttons in hex, the N64's bits); each line holds until the next. Blank lines and `#` comments are skipped. A line that cannot be read, a value out of range (stick -128 to 127) or a frame out of order stops the run with the file and the line number |
+| `--save FILE` | the save file to read (the headless mode never writes it). `tools/regress.py` gives each run a file that does not exist: an empty save |
+| `--fixed`, `--original-physics`, `--smooth-physics` | the window's physics modes (menu.md); the headless mode runs whole frames unless `--dt` says otherwise |
+| `--space-demo`, `--camera-follow N` | the Space demo; the camera's follow speed, 1 to 3 (menu.md) |
 | `--easy-ball` | the easy difficulty's stick direction on the ball at every difficulty (see [menu.md](menu.md)) |
 | `--ballworld` | Ballworld mode from the start: every level is played as the ball alone (see [menu.md](menu.md)). With it, `controlMethod` is 2 and the glove actor `hand` has alpha 0 |
 | `--skip-intro`, `--infinite-lives`, `--infinite-health`, `--unlock-all`, `--level-select` | the options of the Enhancements and Cheats menus (see [menu.md](menu.md)) |
 | `--goto-level FRAME LEVEL` | at original frame FRAME, start LEVEL as the menu's Go to level does |
 | `--log FILE` | also write the program's messages to FILE, each line with the elapsed seconds |
 | `--trace` | print the state after each frame: frame counter, mode, level, random seed, glove, ball and camera positions |
-| `--hash-every N` | print a hash of the game's whole memory every N frames |
+| `--hash-every N`, `--hash` | print a hash of the game's whole memory every N frames, or every frame |
+| `--shot FRAME`, `--shot-prefix PATH`, `--shot-size W H` | save the picture after FRAME as a PNG file. Needs the window build (`build/linux/weemitt`) and a display; the headless build refuses it |
 | `--dt D` | run updates of D original frames each (for example 0.25, four updates per frame); output follows the original frames |
 | `--dt-jitter J` | vary each update's length by up to J times D (for example 0.3), the same way every run; with `--pace` the drawn frame may be longer than D and is split into updates as the window does at a frame rate limit (D 1 and J 0.05 imitate a limit of 20) |
 | `--trace-updates` | print the glove and ball state after every update |
@@ -29,9 +73,28 @@ result every time.
 | `--debug-action FRAME NAME` | at original frame FRAME, start a debug action: `prev-platform`, `next-platform`, `mark-levels`, `timing`, `prev-song`, `next-song`, `inertia`, `quit`, `hurt` or `autoplay` (the title menu's Z). It can be given several times |
 | `--dump FRAME FILE` | after FRAME, write the game's 24 MB of memory to FILE (keep such files out of the repository: they hold game data) |
 
+A mistake on the command line (an unknown option, a value that is not a number or out of range) prints one line and
+exits with 2. `--help` lists the options. A fatal error in the game exits with 1.
+
+The `--trace` line holds the frame counter (`fc`), the mode, the level, the random seed (`rseed`) and the glove's,
+the ball's and the camera's positions. The positions are the floats' bits in hex: `44160000` is 600.0.
+`tools/dtcheck.py` (`f32`) decodes them.
+
 Without `--level`, the game starts normally. With no input it runs its attract mode: the presentation, the
 fly-through, and recorded demos of levels 10, 16, 20, 25 and 30, then again. The demos replay recorded buttons,
 so they exercise a lot of real play.
+
+### Level numbers
+
+| N | Level | N | Level | N | Level |
+| --- | --- | --- | --- | --- | --- |
+| 0 to 7 | Hub 1 to Hub 8 | 20 to 24 | Pirates 1, 2, 3, boss, bonus | 38 | Space boss 1 |
+| 8 | Cave | 25 to 29 | Prehistoric 1, 2, 3, boss, bonus | 39 | Space boss 2 (cut scene) |
+| 9 | Assault course | 30 to 34 | Fear 1, 2, 3, boss, bonus | 40 | Space boss 3 |
+| 10 to 14 | Atlantis 1, 2, 3, boss, bonus | 35 to 37 | Space 1, 2, 3 | 41 | Space bonus |
+| 15 to 19 | Carnival 1, 2, 3, boss, bonus | | | 42 to 47 | the game's other scenes (42 is WAYROOM, 43 the presentation, 44 the fly-through, 47 the outro) |
+
+Cheats, Go to level and `--goto-level` take 0 to 42. The menu's list holds 0 to 41.
 
 ## Recording and replay
 
@@ -44,7 +107,9 @@ Record with `--record FILE`, or with the Developer menu's "Record input (from th
 puts `[REC]` in the window title. The file is flushed after every update, so a crash keeps it.
 
 Replay with `weemitt --rom ROM --replay FILE [--trace] [--trace-updates] [--hash-every N]`. The replay runs the
-recorded updates and ends with the file. The headless build and the window build both do this. `--headless FRAMES`
+recorded updates and ends with the file. It exits with 1 when the run departs from the recording. It takes the level
+and the Space demo, easy ball and camera options from the file, and says so when other ones were given. A recording
+that cannot be written stops a headless run with an error. The headless build and the window build both do this. `--headless FRAMES`
 with `--replay` stops after that many original frames. A window build also prints `--trace` and `--trace-updates`
 lines to standard output when it records, in the format of the headless build, so the two outputs can be compared.
 
@@ -116,12 +181,19 @@ every run, but its memory differs from the baseline's, which was made with the s
   `tools/regress.py check` runs the current build and compares each frame. At the original timing the logic must
   give the same state and the same memory hash in every frame. The memory hash counts pointers to the program's
   own code and data as one value, so a build that only moved the code gives the same hash.
+- `tools/regress.py check` fails when a run has no baseline, when a run exits with an error, and when `--runs` names
+  a run that does not exist.
 - `tools/dtcheck.py LEVEL...` runs each level at dt 1 and at a shorter dt (0.25 unless `--dt` says otherwise) with the
-  same controller input, one entry per original frame, and compares the frame counter, the mode and the level per
+  same controller input, one entry per original frame (regress.py's input, seed 1000 + LEVEL; `--seed N` plays
+  another), and compares the frame counter, the mode and the level per
   original frame and the average speeds of the glove, the ball and the camera. `attract` runs the attract mode. A speed
   ratio far from 1 can be a real frame-rate error or runs that took different paths after a small difference. Find the
   first frame where the runs depart and the reason. Running the level with other input seeds helps: a frame-rate error
-  shows with every seed, a chaotic split does not. [delta-time.md](delta-time.md#verification) says more.
+  shows with every seed, a chaotic split does not. [delta-time.md](delta-time.md#verification) says more. The exit code
+  is 1 when the counters differ or a run fails. A speed marked `<-- check` does not change it. Today
+  `dtcheck.py 5 20 attract` exits with 1: in level 5 the run at dt 0.25 enters a portal at frame 445 and the run at
+  dt 1 does not, and the ball's speed ratio in level 20 is marked. Both are splits after small differences (see
+  delta-time.md, "Known limits").
   `--ballworld` runs both in the Ballworld mode. The mode's decisions and counters run only in ticks, and its float
   and climb are scaled by `deltaTime` (`TICK` and `SCALED` in `src/game/ballworld.c`).
   `CollideActorWithPlane` (`collision.c`) can read `bvel[numBounces - 1]` in a call that has not written it: an
@@ -328,8 +400,11 @@ python3 tools/hostworld/hwtest.py --rom ROM          # needs make headless headl
 - `remove.scene`: the slider is removed while the glove stands on it; the glove then stands on the floor at 13.
 - `reload.scene`: a start of the same level builds the world once again (`rebuilds` 1), and the ball rests again.
   `respawn.scene`: the host's respawn stays after the reload; a restart then puts the glove there.
-- `view.scene`: a drawing view gives the same trace, and another memory hash. `mirror.scene` in levels 5, 13 and
-  26: the same trace and memory hash as without a view.
+- `view.scene`: a drawing view gives the same positions and state as without it, but `rseed` can differ, and the
+  memory hash differs. The view's far distance (4000) becomes the game's `farPlaneDist`, which decides which actors
+  the game updates, and those draw random numbers (host-world.md, "The camera"). The same scene with the level's own
+  far distance (1000) gives the same trace, `rseed` too. `mirror.scene` in levels 5, 13 and 26: the same trace and
+  memory hash as without a view.
 - `steer.scene`: with a steering view along +x and the stick pushed up, the glove walks along +x within 10 degrees.
 - A generated terrain of 39,200 triangles, written to `build/hostworld/` at run time: the time of 1000 frames.
 - Every scene in the build with `PORT_PTR_CHECK` (`make headless-displaced`) without a fatal error. Two variants of

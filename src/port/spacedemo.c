@@ -1,7 +1,7 @@
 /* The Space demo: a build that starts in Space 1 and joins Space 1, 2 and 3 into one run. A level's exit portal
    works as a door: the glove that brings the ball to it goes straight into the next level, without the level-done
    spin and the score screen. After Space 3 a screen shows the time of each level and their sum. The glove has the
-   easy difficulty's ball controls (controller.c), and lives do not run out (the game's own cheat bit 8).
+   easy difficulty's ball controls (controller.c), and lives do not run out (the game's own cheat 3, INFINITE LIVES).
 
    The game calls in at four places: CheckForExit (the door), GameStep's end-of-level mode (the next level),
    GameStep's menu mode (a run that quits from the pause menu starts again) and the screen of times, which has its

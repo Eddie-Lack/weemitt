@@ -70,6 +70,11 @@ void port_game_framebuffers(unsigned int *a, unsigned int *b);
 int port_game_mode(void);
 /* Called by port_fatal (libultra.c) after its message, in place of exit(1), when set. It must not return. */
 extern void (*port_fatal_hook)(void);
+/* Set: the game's own messages (port_log, the game's debug printing) are dropped. The studio's search workers set
+   it. */
+extern int port_log_quiet;
+/* port_fatal's latest message, for the hook. */
+extern char port_fatal_message[900];
 int port_game_level(void);
 /* What the Developer menu draws over the 3D view (devview.c). Both read the game's state and change nothing. */
 typedef struct PortDebugLine {

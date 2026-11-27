@@ -70,6 +70,7 @@ PLATFORM_SRCS := src/port/platform.c src/port/inputevent.c src/port/settings.c s
 ifeq ($(RENDERER),null)
 GFX_SRCS := src/port/gfx_null.c src/port/menu_null.c
 CXX_SRCS :=
+RENDERER_DEFINES := -DPORT_RENDERER_NULL
 else ifeq ($(RENDERER),hostgfx)
 # Only the library: the display list walk and the translation for the host's interpreter (glover_host_gfx), with no
 # OpenGL. gfx_sink_null.c stands in for gfx_render.c, and nothing for gfx_tex.c's decoded textures.
@@ -94,6 +95,11 @@ CXX := $(MINGW)-g++
 BUILD ?= build/windows
 EXE := $(BUILD)/weemitt$(if $(filter 1,$(STUDIO)),-studio).exe
 SDL_PREFIX ?= deps/SDL2-mingw/$(MINGW)
+ifeq ($(wildcard $(SDL_PREFIX)/include/SDL2/SDL.h),)
+ifneq ($(LIB),1)
+$(error $(SDL_PREFIX) has no SDL2 for Windows. Run tools/build_sdl_mingw.sh$(if $(filter 64,$(BITS)), x86_64), or set SDL_PREFIX (docs/building.md))
+endif
+endif
 SDL_CFLAGS := -I$(SDL_PREFIX)/include -I$(SDL_PREFIX)/include/SDL2
 SDL_LIBS := -L$(SDL_PREFIX)/lib -lmingw32 -lSDL2main -lSDL2 -mwindows
 LDFLAGS := -static-libgcc -static-libstdc++
@@ -177,7 +183,7 @@ GAME_CFLAGS := -std=gnu89 $(GAME_FLAGS)
 GAME_CXXFLAGS := -x c++ -std=gnu++14 -fno-exceptions -fno-rtti -fno-finite-loops $(CLANG_FLAGS) $(GAME_FLAGS)
 # The platform layer and the renderer talk to SDL and OpenGL, so they keep the system's structure layout.
 HOST_CFLAGS := $(ARCH_FLAGS) -std=gnu99 -O2 -g $(PIC_FLAGS) -Wall -Wno-unused-function -Isrc/port -Isrc/gfx $(SDL_CFLAGS) \
-               $(AUDIO_DEFINES) $(PTR_FLAGS)
+               $(AUDIO_DEFINES) $(RENDERER_DEFINES) $(PTR_FLAGS)
 HOST_CFLAGS += $(LIB_FLAGS)
 # SPACE_DEMO=1: the platform layer starts the Space demo without options.
 ifeq ($(SPACE_DEMO),1)
@@ -205,6 +211,10 @@ all: $(if $(filter 1,$(LIB)),$(LIB_OUT),$(EXE))
 # platform layer, which opens the sound device only with the real player, is then compiled again.
 AUDIO_MODE := $(BUILD)/audio-mode
 $(shell mkdir -p $(BUILD) && (echo $(AUDIO) | cmp -s - $(AUDIO_MODE) || echo $(AUDIO) > $(AUDIO_MODE)))
+# The renderer that the build directory was last linked with, in the same way: a change of RENDERER links the program
+# again. Without it, `make RENDERER=null` and a later `make` would leave the program without its renderer.
+RENDERER_MODE := $(BUILD)/renderer-mode
+$(shell mkdir -p $(BUILD) && (echo $(RENDERER) | cmp -s - $(RENDERER_MODE) || echo $(RENDERER) > $(RENDERER_MODE)))
 
 windows:
 	$(MAKE) TARGET=windows
@@ -397,8 +407,8 @@ $(BUILD)/glover.framework/glover: $(LIB_OBJS) $(BUILD)/glover.exports src/lib/In
 ifeq ($(STUDIO),1)
 include studio.mk
 else
-$(EXE): $(GAME_OBJS) $(HOST_OBJS)
-	$(if $(CXX_SRCS),$(CXX),$(CC)) $(ARCH_FLAGS) $(LDFLAGS) -o $@ $^ $(SDL_LIBS) -lm
+$(EXE): $(GAME_OBJS) $(HOST_OBJS) $(RENDERER_MODE)
+	$(if $(CXX_SRCS),$(CXX),$(CC)) $(ARCH_FLAGS) $(LDFLAGS) -o $@ $(filter-out $(RENDERER_MODE),$^) $(SDL_LIBS) -lm
 endif
 
 # The headers that each game object includes (-MMD): the game's headers hold inline code (Ptr32, docs/port64.md).
@@ -505,7 +515,9 @@ $(BUILD)/gen/ram.o: gen/ram.S
 	$(CC) $(ARCH_FLAGS) $(PTR_FLAGS) -c $< -o $@
 
 GLOVEWORLD ?= ../gloveworld
-PYTHON ?= $(GLOVEWORLD)/.venv/bin/python
+# The Python for `make gen` and `make check`: gloveworld's virtual environment when it exists, or else python3. Both
+# need pyelftools (docs/building.md, "The tools").
+PYTHON ?= $(if $(wildcard $(GLOVEWORLD)/.venv/bin/python),$(GLOVEWORLD)/.venv/bin/python,python3)
 
 gen:
 	cd tools/gen && GLOVEWORLD=$(abspath $(GLOVEWORLD)) $(abspath $(PYTHON)) gen_types.py

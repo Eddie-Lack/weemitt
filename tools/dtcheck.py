@@ -10,8 +10,12 @@ frame, as at 80 frames a second in a level). It compares the state trace at each
   so the tool reports the speeds instead: the average distance each moves per original frame in each run. A speed
   that is about 1/dt times the original one means a movement that does not scale with deltaTime.
 
-Usage: python3 tools/dtcheck.py LEVEL... [--dt 0.25] [--frames 600] [--rom ROM] [--exe PATH] [--ballworld]
+Usage: python3 tools/dtcheck.py LEVEL... [--dt 0.25] [--frames 600] [--seed N] [--rom ROM] [--exe PATH] [--ballworld]
        python3 tools/dtcheck.py attract        the attract mode (menus and fly-through; demos run at dt = 1)
+
+The input of a level is regress.py's input script, seed 1000 + LEVEL; --seed N plays another one. The tool exits
+with 1 when the counters differ, or when a run fails or gives no frames. A speed marked "<-- check" does not change
+the exit code: judge it by hand (docs/delta-time.md, "Verification").
 """
 import argparse
 import math
@@ -37,7 +41,7 @@ def run(exe, rom, level, frames, dt, script):
     cmd = [exe, "--rom", rom, "--headless", str(frames), "--trace", "--dt", str(dt)] + EXTRA
     if level is not None:
         cmd += ["--level", str(level), "--input", str(script)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     rows = []
     for line in r.stdout.splitlines():
         if not line.startswith("frame "):
@@ -64,16 +68,19 @@ def speeds(rows, key):
     return sum(out) / len(out) if out else 0.0
 
 
-def check(exe, rom, level, frames, dt):
+def check(exe, rom, level, frames, dt, seed=None):
     work = ROOT / "build" / "dtcheck"
     work.mkdir(parents=True, exist_ok=True)
     script = work / f"level{level}.input"
     if level is not None:
-        script.write_text(regress.input_script(level, frames))
+        script.write_text(regress.input_script(level, frames, seed))
     base, rc1 = run(exe, rom, level, frames, 1.0, script)
     fast, rc2 = run(exe, rom, level, frames, dt, script)
     name = "attract" if level is None else f"level {level}"
     print(f"{name}: {len(base)} frames at dt 1 (exit {rc1}), {len(fast)} at dt {dt} (exit {rc2})")
+    if rc1 != 0 or rc2 != 0 or not base or not fast:
+        print("  FAIL: a run failed or gave no frames")
+        return False
     first = None
     for i, (a, b) in enumerate(zip(base, fast)):
         if (a["fc"], a["mode"], a["level"]) != (b["fc"], b["mode"], b["level"]):
@@ -110,7 +117,12 @@ def main():
     ap.add_argument("--rom", default=regress.default_rom())
     ap.add_argument("--exe", default=str(ROOT / "build" / "headless" / "weemitt"))
     ap.add_argument("--ballworld", action="store_true", help="both runs in the Ballworld mode")
+    ap.add_argument("--seed", type=int, help="the input script's seed (default 1000 + the level)")
     args = ap.parse_args()
+    regress.require_rom(args.rom, "dtcheck.py")
+    for lv in args.levels:
+        if lv != "attract" and not (lv.lstrip("-").isdigit() and 0 <= int(lv) <= 47):
+            sys.exit(f"dtcheck.py: {lv} is not a level: give 0 to 47, or attract")
     if args.ballworld:
         EXTRA.append("--ballworld")
     if args.exe == str(ROOT / "build" / "headless" / "weemitt"):
@@ -119,7 +131,7 @@ def main():
     for lv in args.levels:
         level = None if lv == "attract" else int(lv)
         frames = 3000 if level is None else args.frames
-        ok &= check(args.exe, args.rom, level, frames, args.dt)
+        ok &= check(args.exe, args.rom, level, frames, args.dt, args.seed)
     sys.exit(0 if ok else 1)
 
 

@@ -54,8 +54,9 @@ enum { DEBUGPAD_OFF, DEBUGPAD_SECOND, DEBUGPAD_KEYBOARD };
 #define TIMER_SCALE_DEFAULT 16
 
 /* How the game's logic runs. Smooth: one update per drawn frame, for the time that has passed (delta-time.md).
-   Original: one whole update per original frame, and the drawn frames blend two of them (interpolation.md). */
-enum { PHYSICS_SMOOTH, PHYSICS_ORIGINAL };
+   Original: one whole update per original frame, and the drawn frames blend two of them (interpolation.md).
+   Fixed: one whole update per original frame, and each drawn frame shows the latest one, as the N64 does (--fixed). */
+enum { PHYSICS_SMOOTH, PHYSICS_ORIGINAL, PHYSICS_FIXED };
 
 typedef struct Settings {
     int physicsMode;                   /* PHYSICS_SMOOTH or PHYSICS_ORIGINAL */
@@ -99,6 +100,16 @@ typedef struct Settings {
     int widescreen;                    /* WIDESCREEN_OFF, WIDESCREEN_STRETCH or WIDESCREEN_HORPLUS */
     int debugPad;                      /* not saved: DEBUGPAD_OFF, DEBUGPAD_SECOND or DEBUGPAD_KEYBOARD */
     int timerScale;                    /* not saved: how many times longer the game's timing bars show the time */
+    int fullscreen;                    /* the window fills the screen (F11, Alt+Enter, Graphics) */
+    int windowX, windowY;              /* the window's place when it is not full screen (windowW 0: centred) */
+    int windowW, windowH;              /* the window's size when it is not full screen (0: the default size) */
+    int pauseMenu;                     /* the game waits while the menu is open (default off) */
+    int pauseUnfocused;                /* the game waits while the window is not the active one (default off) */
+    /* The studio's windows that show (Studio menu). The normal program keeps them in the file too. */
+    int studioSearch;                  /* Points and search (default on) */
+    int studioInput;                   /* the input display (default on) */
+    int studioLevel;                   /* Start a level */
+    int studioStates;                  /* Save and load states */
 } Settings;
 
 #ifdef __cplusplus
@@ -139,10 +150,18 @@ int settings_pad_down(const Settings *st, void *pad, int input);
 void settings_stick(const Settings *st, int rawX, int rawY, int *outX, int *outY);
 /* Reads path into st. A missing file leaves the defaults. */
 void settings_load(Settings *st, const char *path);
-/* Writes st to path. Returns 0 when it worked. */
+/* Writes st to path. Returns 0 when it worked. After settings_keep_file, a value that is as it was at the start of
+   the run is written as the file had it: the command line's one-run options do not reach the file. */
 int settings_save(const Settings *st, const char *path);
-/* Puts the path of settings.ini in the save folder into out (empty when there is none). */
+/* Keeps file (the settings as settings.ini gave them) and start (the same after the command line's options) for
+   settings_save. */
+void settings_keep_file(const Settings *file, const Settings *start);
+/* Puts the path of settings.ini in the save folder into out. With no save folder, it is settings.ini in the
+   working folder. */
 void settings_path(char *out, int size);
+/* The save folder, with a separator at its end: SDL's preference path. With none (SDL cannot make it), the
+   working folder: an empty string. Returns 0 when it is the preference path. */
+int settings_folder(char *out, int size);
 /* True when any key bound to the input is down; keys is SDL's keyboard state. */
 int settings_input_down(const Settings *st, const unsigned char *keys, int input);
 

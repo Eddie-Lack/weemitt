@@ -28,8 +28,16 @@ Settings *cfg;
 char cfgPath[512];
 
 struct Windows {
-    bool graphics, audio, controls, enhancements, cheats, developer, log, studioLevel, studioStates;
+    bool graphics, audio, controls, enhancements, cheats, developer, log;
 } win;
+
+/* A line at the top of the window for a few seconds (menu_notice), and when it goes. */
+char noticeText[200];
+Uint32 noticeUntil;
+
+/* The line under the Controls window's table after a binding took a key from another input, and when it goes. */
+char movedText[160];
+Uint32 movedUntil;
 
 /* Rebinding: which input and key slot wait for a key press (-1: none). */
 int rebindInput = -1;
@@ -44,11 +52,22 @@ int rebindDev;
 long testFrames = -1;
 long frameCount;
 
+void show_notice(const char *text) {
+    snprintf(noticeText, sizeof(noticeText), "%s", text);
+    noticeUntil = SDL_GetTicks() + 6000;
+}
+
 void save_settings() {
     if (settingsDirty) {
         settingsDirty = false;
         if (settings_save(cfg, cfgPath) != 0) {
-            fprintf(stderr, "weemitt: cannot write %s\n", cfgPath);
+            static bool told;
+
+            plog_printf("weemitt: cannot write the settings to %s", cfgPath);
+            if (!told) {
+                told = true;
+                show_notice("The settings could not be saved. The log says why.");
+            }
         }
     }
 }
@@ -63,19 +82,157 @@ void set_open(bool open) {
     }
 }
 
+/* Says which input lost the binding to the new one, under the Controls window's table. */
+void note_moved(const char *name, int from, int to) {
+    if (from != to) {
+        snprintf(movedText, sizeof(movedText), "%s was moved from %s to %s.", name, settings_input_name(from),
+                 settings_input_name(to));
+        movedUntil = SDL_GetTicks() + 6000;
+    }
+}
+
 void bind_key(int input, int slot, int scancode) {
     int i, s;
 
     /* A key does one thing: take it away from any other input. */
     for (i = 0; i < IN_COUNT; i++) {
         for (s = 0; s < KEY_SLOTS; s++) {
-            if (cfg->keys[i][s] == scancode) {
+            if (cfg->keys[i][s] == scancode && !(i == input && s == slot)) {
                 cfg->keys[i][s] = 0;
+                note_moved(SDL_GetScancodeName((SDL_Scancode)scancode), i, input);
             }
         }
     }
     cfg->keys[input][slot] = scancode;
     settingsDirty = true;
+}
+
+/* ---- Where the windows open. A window opens at its preferred place, or at the first free place that holds it,
+   with no other window over it. Every window is kept inside the game window, also when that gets smaller. */
+
+struct Placed {
+    const char *name;
+    ImVec2 pos, size;
+    long frame;   /* the last frame it was drawn */
+    int pending;  /* frames to wait before it is placed: its size is known after its first frame */
+    bool done;    /* placed once: later it keeps the place it was given or dragged to, inside the game window */
+};
+Placed placed[24];
+int placedCount;
+
+Placed *placed_entry(const char *name) {
+    for (int i = 0; i < placedCount; i++) {
+        if (!strcmp(placed[i].name, name)) {
+            return &placed[i];
+        }
+    }
+    if (placedCount == (int)(sizeof(placed) / sizeof(placed[0]))) {
+        return NULL;
+    }
+    placed[placedCount].name = name;
+    placed[placedCount].frame = -10;
+    return &placed[placedCount++];
+}
+
+/* The top of the free area: below the menu bar when it shows. */
+float free_top() {
+    return menuOpen ? ImGui::GetFrameHeight() + 4.0f : 4.0f;
+}
+
+bool overlaps_other(const Placed *self, ImVec2 pos, ImVec2 size) {
+    for (int i = 0; i < placedCount; i++) {
+        const Placed &o = placed[i];
+
+        if (&o == self || o.frame < frameCount - 1) {
+            continue;
+        }
+        if (pos.x < o.pos.x + o.size.x && o.pos.x < pos.x + size.x && pos.y < o.pos.y + o.size.y
+            && o.pos.y < pos.y + size.y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Marks a fixed window (the studio bar) as taken space. */
+void reserve_space(const char *name, ImVec2 pos, ImVec2 size) {
+    Placed *e = placed_entry(name);
+
+    if (e != NULL) {
+        e->pos = pos;
+        e->size = size;
+        e->frame = frameCount;
+    }
+}
+
+/* Call it after a successful Begin. */
+void place_window(const char *name, ImVec2 preferred) {
+    Placed *e = placed_entry(name);
+    ImVec2 ds = ImGui::GetIO().DisplaySize;
+    ImVec2 size = ImGui::GetWindowSize();
+    ImVec2 pos = ImGui::GetWindowPos();
+    ImVec2 want = pos;
+    float top = free_top();
+
+    if (e == NULL) {
+        return;
+    }
+    if (!e->done && e->pending == 0) {
+        e->pending = 2;
+    }
+    if (e->pending > 0 && --e->pending == 0) {
+        e->done = true;
+        ImVec2 at = ImVec2(preferred.x, preferred.y < top ? top : preferred.y);
+        bool found = at.x + size.x <= ds.x && at.y + size.y <= ds.y && !overlaps_other(e, at, size);
+
+        for (float y = top; !found && y + size.y <= ds.y; y += 10.0f) {
+            for (float x = 4.0f; x + size.x <= ds.x; x += 10.0f) {
+                if (!overlaps_other(e, ImVec2(x, y), size)) {
+                    at = ImVec2(x, y);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        want = at;
+    }
+    /* Inside the game window: the right and bottom edges first, then the top left wins. */
+    if (want.x + size.x > ds.x) want.x = ds.x - size.x;
+    if (want.y + size.y > ds.y) want.y = ds.y - size.y;
+    if (want.x < 0.0f) want.x = 0.0f;
+    if (want.y < top) want.y = top;
+    if (want.x != pos.x || want.y != pos.y) {
+        ImGui::SetWindowPos(want);
+        pos = want;
+    }
+    e->pos = pos;
+    e->size = size;
+    e->frame = frameCount;
+}
+
+/* A button that asks first. It returns true when the question's "Yes" was pressed. */
+bool confirm_button(const char *label, const char *question, const char *yes) {
+    char id[160];
+    bool done = false;
+    int shown = (int)(strstr(label, "##") ? strstr(label, "##") - label : (long)strlen(label));
+
+    snprintf(id, sizeof(id), "%.*s?##confirm_%s", shown, label, label);
+    if (ImGui::Button(label)) {
+        ImGui::OpenPopup(id);
+    }
+    if (ImGui::BeginPopupModal(id, NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(question);
+        if (ImGui::Button(yes)) {
+            done = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    return done;
 }
 
 void placeholder(const char *label, const char *note = "Coming later") {
@@ -176,21 +333,26 @@ void graphics_window() {
         ImGui::End();
         return;
     }
+    place_window("Graphics", ImVec2(20, 40));
     ImGui::SeparatorText("Frame rate");
     {
-        static const char *const modes[] = {"Smooth (frame-rate independent)", "Original (interpolated)"};
-        int mode = cfg->physicsMode == PHYSICS_ORIGINAL ? 1 : 0;
+        /* The order of PHYSICS_SMOOTH, PHYSICS_ORIGINAL and PHYSICS_FIXED. */
+        static const char *const modes[] = {"Smooth (frame-rate independent)", "Original (interpolated)",
+                                            "Original (no blending)"};
+        int mode = cfg->physicsMode;
 
         ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::Combo("Physics", &mode, modes, 2)) {
-            cfg->physicsMode = mode ? PHYSICS_ORIGINAL : PHYSICS_SMOOTH;
+        if (ImGui::Combo("Physics", &mode, modes, 3)) {
+            cfg->physicsMode = mode;
             settingsDirty = true;
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Smooth: the game logic runs in short steps, once per drawn frame.\n"
                               "Original: the logic runs as on the N64, 20 steps a second in a level and 30 in a menu\n"
                               "(glitches that need whole steps, such as wall clips, work). The picture is drawn at the\n"
-                              "frame rate below and blends the two latest steps. This adds up to one step of delay.");
+                              "frame rate below and blends the two latest steps. This adds up to one step of delay.\n"
+                              "Original (no blending): the same logic, and each drawn frame shows the latest step, as\n"
+                              "the N64 does. No delay is added. The same as --fixed.");
         }
     }
     bool vsync = cfg->vsync != 0;
@@ -213,6 +375,32 @@ void graphics_window() {
                           "second, menus at 30. Unlimited stops at 10 times that rate (200 in a level, 300 in a menu).\n"
                           "Original: Unlimited stops at 1000 FPS.");
     }
+    ImGui::SeparatorText("Window");
+    bool full = port_fullscreen() != 0;
+    if (ImGui::Checkbox("Full screen", &full)) {
+        port_set_fullscreen(full);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("F11 and Alt+Enter switch it too. The window keeps its size and place for the next start.");
+    }
+    bool pauseMenu = cfg->pauseMenu != 0;
+    if (ImGui::Checkbox("Pause while the menu is open", &pauseMenu)) {
+        cfg->pauseMenu = pauseMenu;
+        settingsDirty = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Off: the game keeps running behind the menu, as before.\n"
+                          "On: the game waits while the menu is open. The music goes on.");
+    }
+    bool pauseFocus = cfg->pauseUnfocused != 0;
+    if (ImGui::Checkbox("Pause when the window loses focus", &pauseFocus)) {
+        cfg->pauseUnfocused = pauseFocus;
+        settingsDirty = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("The game waits while another window is active. The music goes on.\n"
+                          "Audio, Mute when the window loses focus silences it.");
+    }
     ImGui::SeparatorText("Image");
     image_options();
     ImGui::End();
@@ -223,13 +411,19 @@ void audio_window() {
         ImGui::End();
         return;
     }
+    place_window("Audio", ImVec2(20, 262));
+    if (port_sound_problem()[0]) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", port_sound_problem());
+        ImGui::PopTextWrapPos();
+    }
     int volume = cfg->volume;
     if (ImGui::SliderInt("Master volume", &volume, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
         cfg->volume = volume;
         settingsDirty = true;
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("100%% is the game's own level.");
+        ImGui::SetTooltip("100%% is the game's own level, which is loud. The program starts at 20%%.");
     }
     int music = cfg->musicVolume;
     if (ImGui::SliderInt("Music volume", &music, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
@@ -284,8 +478,9 @@ void bind_joy(int input, int slot, int code) {
     /* A joystick control does one thing: take it away from any other input. */
     for (int i = 0; i < IN_COUNT; i++) {
         for (int s = 0; s < KEY_SLOTS; s++) {
-            if (cfg->joys[i][s] == code) {
+            if (cfg->joys[i][s] == code && !(i == input && s == slot)) {
                 cfg->joys[i][s] = 0;
+                note_moved(settings_joy_name(code), i, input);
             }
         }
     }
@@ -297,8 +492,9 @@ void bind_pad(int input, int slot, int code) {
     /* A controller button does one thing: take it away from any other input. */
     for (int i = 0; i < IN_COUNT; i++) {
         for (int s = 0; s < KEY_SLOTS; s++) {
-            if (cfg->pads[i][s] == code) {
+            if (cfg->pads[i][s] == code && !(i == input && s == slot)) {
                 cfg->pads[i][s] = 0;
+                note_moved(settings_pad_name(code), i, input);
             }
         }
     }
@@ -366,10 +562,16 @@ void controls_window() {
         ImGui::End();
         return;
     }
+    place_window("Controls", ImVec2(480, 40));
+    if (movedText[0] && SDL_GetTicks() < movedUntil) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", movedText);
+    } else {
+        ImGui::TextDisabled("A key belongs to one input: a new binding takes it from the other.");
+    }
     if (ImGui::BeginTabBar("controls_tabs")) {
         if (ImGui::BeginTabItem("Keyboard")) {
             ImGui::TextUnformatted("Each input has two keys.");
-            if (ImGui::Button("Reset to defaults")) {
+            if (confirm_button("Reset to defaults", "Put every key back as it was at the start?", "Reset the keys")) {
                 settings_default_keys(cfg);
                 rebindInput = -1;
                 settingsDirty = true;
@@ -394,7 +596,9 @@ void controls_window() {
             }
             ImGui::TextUnformatted(joy ? "Each input has two bindings. Axes 0 and 1 move the glove."
                                        : "Each input has two bindings. The left stick moves the glove.");
-            if (ImGui::Button("Reset to defaults")) {
+            if (confirm_button("Reset to defaults##pad",
+                               "Put every controller binding, the dead zone and the full tilt back as they were?",
+                               "Reset the controller")) {
                 settings_default_pads(cfg);
                 settings_default_joys(cfg);
                 cfg->stickDead = STICK_DEAD_DEFAULT;
@@ -431,6 +635,7 @@ void enhancements_window() {
         ImGui::End();
         return;
     }
+    place_window("Enhancements", ImVec2(20, 410));
     ImGui::TextUnformatted("The game draws at any frame rate. Graphics, Physics chooses how its logic runs.");
     ImGui::Separator();
     bool easy = cfg->easyBall != 0;
@@ -525,25 +730,91 @@ const char *const levelNames[] = {
 };
 
 #ifdef PORT_STUDIO
+/* The first key bound to an input, for the studio's help ("" when none). */
+const char *first_key(int input) {
+    for (int s = 0; s < KEY_SLOTS; s++) {
+        if (cfg->keys[input][s] > 0) {
+            return SDL_GetScancodeName((SDL_Scancode)cfg->keys[input][s]);
+        }
+    }
+    return "";
+}
+
+/* The controls while paused, with the keyboard's keys: the help of studio_controls_help with the current keys. */
+const char *studio_key_help() {
+    static char text[400];
+
+    snprintf(text, sizeof(text),
+             "Paused. D-pad left, right (%s, %s): a frame back or on. L, R (%s, %s): a second back or on. "
+             "A (%s) or all C buttons (%s %s %s %s): play on from here. B (%s): play the recording.",
+             first_key(IN_DLEFT), first_key(IN_DRIGHT), first_key(IN_L), first_key(IN_R), first_key(IN_A),
+             first_key(IN_CUP), first_key(IN_CDOWN), first_key(IN_CLEFT), first_key(IN_CRIGHT), first_key(IN_B));
+    return text;
+}
+
+/* A window that the settings keep open or closed: Begin with the setting as its close box. */
+bool begin_kept(const char *name, int *setting, ImGuiWindowFlags flags) {
+    bool open = *setting != 0;
+    bool shown = ImGui::Begin(name, &open, flags);
+
+    if (!open) {
+        *setting = 0;
+        settingsDirty = true;
+    }
+    return shown;
+}
+
+/* Asks before an action that starts a new timeline, when the old one holds points, a search or a result. The
+   question is a popup of the window it is called in. Returns true when the action should run now. */
+bool new_timeline_ok(const char *id, bool clicked) {
+    bool go = false;
+
+    if (clicked) {
+        if (studio_has_work()) {
+            ImGui::OpenPopup(id);
+        } else {
+            go = true;
+        }
+    }
+    if (ImGui::BeginPopupModal(id, NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("A new timeline drops the points, the search and its result.");
+        ImGui::TextUnformatted("States, Save the route keeps the route first.");
+        if (ImGui::Button("Go on")) {
+            go = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    return go;
+}
+
 /* The studio bar: the timeline and its controls, at the bottom of the window. */
 void studio_bar() {
     StudioInfo in;
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     char text[160];
     int frame;
-    int length;
+    ImVec2 pos = ImVec2(8.0f, ds.y - 104.0f);
+    ImVec2 size = ImVec2(ds.x - 16.0f, 96.0f);
 
     studio_info(&in);
     frame = (int)in.frame;
-    length = (int)(in.length > 0 ? in.length : 1);
-    ImGui::SetNextWindowPos(ImVec2(8.0f, ds.y - 104.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(ds.x - 16.0f, 96.0f), ImGuiCond_Always);
+    reserve_space("Studio", pos, size);
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.8f);
     ImGui::Begin("Studio", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
     ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::SliderInt("##timeline", &frame, 0, length, "frame %d")) {
+    /* An empty timeline shows an empty bar that cannot be moved. */
+    ImGui::BeginDisabled(in.length == 0);
+    if (ImGui::SliderInt("##timeline", &frame, 0, in.length > 0 ? (int)in.length : 1, "frame %d")) {
         studio_request_seek(frame);
     }
+    ImGui::EndDisabled();
     if (ImGui::Button("|<")) {
         studio_request_seek(0);
     }
@@ -585,28 +856,95 @@ void studio_bar() {
     snprintf(text, sizeof(text), "Frame %ld of %ld (%.2f s). %ld saved states, %.0f MB.", in.frame, in.length,
              in.frame * port_game_retraces() / 60.0, in.states, in.megabytes);
     ImGui::TextUnformatted(text);
-    ImGui::TextDisabled("%s", in.paused ? studio_controls_help() : "All C buttons together: pause.");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", in.paused ? studio_key_help() : "All C buttons together: pause.");
+    ImGui::PopTextWrapPos();
     ImGui::End();
 }
 
-/* The points and the search: a window at the top right while the studio bar shows. */
+/* One button of the input display: lit when it is held. */
+void show_button(const char *name, unsigned short buttons, unsigned short bit, bool changed) {
+    ImVec4 on = changed ? ImVec4(1.0f, 0.6f, 0.2f, 1.0f) : ImVec4(0.3f, 0.8f, 0.3f, 1.0f);
+
+    if (buttons & bit) {
+        ImGui::TextColored(on, "%s", name);
+    } else {
+        ImGui::TextDisabled("%s", name);
+    }
+    ImGui::SameLine();
+}
+
+/* The input display: the stick and the buttons of the update that led to the frame on show, and of the next one. */
+void studio_input_window() {
+    static const struct { const char *name; unsigned short bit; } buttons[] = {
+        {"A", 0x8000}, {"B", 0x4000}, {"Z", 0x2000}, {"S", 0x1000}, {"L", 0x0020}, {"R", 0x0010},
+        {"C^", 0x0008}, {"Cv", 0x0004}, {"C<", 0x0002}, {"C>", 0x0001},
+        {"D^", 0x0800}, {"Dv", 0x0400}, {"D<", 0x0200}, {"D>", 0x0100},
+    };
+    StudioInfo in;
+    ImVec2 ds = ImGui::GetIO().DisplaySize;
+
+    if (!begin_kept("Input", &cfg->studioInput, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    place_window("Input", ImVec2(8.0f, ds.y - 230.0f));
+    studio_info(&in);
+    for (int row = 0; row < 2; row++) {
+        long f = row == 0 ? in.frame - 1 : in.frame;
+        unsigned short b;
+        signed char x, y;
+
+        if (!studio_input_at(f, &b, &x, &y)) {
+            ImGui::TextDisabled(row == 0 ? "To this frame: none" : "Next: none");
+            continue;
+        }
+        bool changed = studio_input_changed(f) != 0;
+        ImGui::Text(row == 0 ? "To frame %ld:" : "Next (%ld):", row == 0 ? in.frame : in.frame + 1);
+        ImGui::SameLine(110.0f);
+        /* The stick as a dot in a box, and its numbers. */
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float r = ImGui::GetTextLineHeight() * 0.5f;
+        ImVec2 c = ImVec2(p.x + r, p.y + r);
+        dl->AddRect(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), IM_COL32(160, 160, 160, 255));
+        dl->AddCircleFilled(ImVec2(c.x + x / 80.0f * r, c.y - y / 80.0f * r), 2.5f,
+                            changed ? IM_COL32(255, 150, 50, 255) : IM_COL32(80, 220, 80, 255));
+        ImGui::Dummy(ImVec2(2.0f * r, 2.0f * r));
+        ImGui::SameLine();
+        ImGui::Text("%4d %4d ", x, y);
+        ImGui::SameLine();
+        for (const auto &bt : buttons) {
+            show_button(bt.name, b, bt.bit, changed);
+        }
+        ImGui::NewLine();
+    }
+    ImGui::TextDisabled("Orange: a take changed this input.");
+    ImGui::End();
+}
+
+/* The points and the search. */
 void studio_search_window() {
     static float radius = 40.0f;
     static int workers = 0;
     static int limits = 2;
+    static int minutes = 0;
     static const char *const limitNames[] = {"none", "loose", "strict"};
     const StudioPoint *points;
     int npoints = studio_points(&points);
     long start = studio_start_frame();
     StudioSearchInfo si;
-    StudioInfo in;
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     int i;
 
-    studio_info(&in);
+    if (!begin_kept("Points and search", &cfg->studioSearch,
+                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::End();
+        return;
+    }
+    place_window("Points and search", ImVec2(ds.x - 370.0f, 30.0f));
     studio_search_info(&si);
-    ImGui::SetNextWindowPos(ImVec2(ds.x - 360.0f, menuOpen ? 30.0f : 8.0f), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Points and search", NULL, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 340.0f);
     if (ImGui::Button("Start here")) {
         studio_mark_start();
     }
@@ -635,12 +973,12 @@ void studio_search_window() {
         }
         ImGui::SameLine();
         if (points[i].place) {
-            ImGui::Text("%s %d: %s at %.0f %.0f %.0f, radius %.0f (frame %ld)", i + 1 == npoints ? "End" : "Point", i + 1,
-                        points[i].ofBall ? "ball" : "glove", points[i].at[0], points[i].at[1], points[i].at[2],
-                        points[i].radius, points[i].frame);
+            ImGui::TextWrapped("%s %d, frame %ld: %s at %.0f %.0f %.0f, radius %.0f", i + 1 == npoints ? "End" : "Point",
+                               i + 1, points[i].frame, points[i].ofBall ? "ball" : "glove", points[i].at[0],
+                               points[i].at[1], points[i].at[2], points[i].radius);
         } else {
-            ImGui::Text("%s %d: the level is done (frame %ld)", i + 1 == npoints ? "End" : "Point", i + 1,
-                        points[i].frame);
+            ImGui::TextWrapped("%s %d, frame %ld: the level is done", i + 1 == npoints ? "End" : "Point", i + 1,
+                               points[i].frame);
         }
         ImGui::PopID();
     }
@@ -654,15 +992,29 @@ void studio_search_window() {
                           "frames, the stick changes by at most 96 a frame.\nstrict: at least 3 frames, at most 48 a "
                           "frame.");
     }
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SliderInt("time limit", &minutes, 0, 120, minutes ? "%d min" : "none");
     if (!si.running) {
         if (ImGui::Button("Search")) {
-            studio_start_search(workers, 0.0, limitNames[limits]);
+            studio_start_search(workers, minutes * 60.0, limitNames[limits]);
         }
     } else if (ImGui::Button("Stop the search")) {
         studio_stop_search();
     }
+    if (si.running || si.seconds > 0.0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%.0f s, %ld tries (%.0f a second)", si.seconds, si.tries,
+                            si.seconds > 0.0 ? si.tries / si.seconds : 0.0);
+    }
     if (si.message[0]) {
-        ImGui::TextWrapped("%s", si.message);
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", si.message);
+    }
+    if (!si.folder[0]) {
+        /* No search yet. */
+    } else if (si.baseFrame >= 0) {
+        ImGui::Text("Your route: the end at frame %ld%s", si.baseFrame, si.baseLoads ? " (with loads)" : "");
+    } else if (si.baseFrame == -1) {
+        ImGui::TextDisabled("Your route does not reach the end point.");
     }
     if (si.haveBest) {
         if (si.bestFrame >= 0) {
@@ -674,13 +1026,18 @@ void studio_search_window() {
                 ImGui::Text("after %d load%s (%ld with the loads)", si.bestLoads, si.bestLoads == 1 ? "" : "s",
                             bestCost);
             }
-            if (si.firstFrame >= 0) {
-                long firstCost = si.firstFrame + (long)si.firstLoads * STUDIO_LOAD_FRAMES;
+            if (!si.folder[0]) {
+        /* No search yet. */
+    } else if (si.baseFrame >= 0) {
+                long baseCost = si.baseFrame + (long)si.baseLoads * STUDIO_LOAD_FRAMES;
 
-                ImGui::Text("First result: %ld, %+ld frames with the loads", firstCost, bestCost - firstCost);
+                ImGui::Text("Gain: %ld frames with the loads", baseCost - bestCost);
             }
         } else {
             ImGui::Text("Not reached yet (progress %.1f)", si.progress);
+            if (npoints > 0 && !points[npoints - 1].place) {
+                ImGui::TextDisabled("A 'level is done' point needs a route that ends the level.");
+            }
         }
         if (ImGui::Button("Take the result")) {
             studio_take_result();
@@ -692,34 +1049,62 @@ void studio_search_window() {
     if (studio_can_undo_take() && ImGui::Button("Undo the take")) {
         studio_undo_take();
     }
+    if (si.takenFrame >= 0) {
+        ImGui::Text("On the timeline: the result that ends at frame %ld", si.takenFrame);
+    }
     if (si.folder[0]) {
         ImGui::TextDisabled("%s", si.folder);
     }
-    (void)in;
+    {
+        /* The folders are counted when the window appears and when a search starts or ends: the count looks at
+           many file names. */
+        static int folders = -1;
+        static double mb;
+        static bool wasRunning;
+
+        if (folders < 0 || ImGui::IsWindowAppearing() || wasRunning != (si.running != 0)) {
+            folders = studio_search_folders(&mb);
+            wasRunning = si.running != 0;
+        }
+        if (folders > 1 && !si.running) {
+            if (confirm_button("Delete old searches", "Delete the folders of the earlier searches?", "Delete them")) {
+                studio_delete_old_searches();
+                folders = -1;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d folders, %.0f MB", folders, mb);
+        }
+    }
+    ImGui::PopTextWrapPos();
     ImGui::End();
 }
 
 void studio_level_window() {
     static int levelPick = 0;
     bool canGo = port_goto_possible() != 0;
+    bool clicked;
 
-    if (!ImGui::Begin("Start a level", &win.studioLevel, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!begin_kept("Start a level", &cfg->studioLevel, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
+    place_window("Start a level", ImVec2(20, 40));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
     ImGui::TextWrapped("The level starts at once, as the level select does (medium difficulty, save slot 6). "
-                       "The timeline starts again from there.");
+                       "The timeline starts again from there. While paused, its first frame shows and the pause stays.");
+    ImGui::PopTextWrapPos();
     ImGui::SetNextItemWidth(200.0f);
     ImGui::Combo("Level", &levelPick, levelNames, (int)(sizeof(levelNames) / sizeof(levelNames[0])), 12);
     ImGui::SameLine();
     if (!canGo) {
         ImGui::BeginDisabled();
     }
-    if (ImGui::Button("Start")) {
-        studio_goto_level(levelPick);
-    }
+    clicked = ImGui::Button("Start");
     if (!canGo) {
         ImGui::EndDisabled();
+    }
+    if (new_timeline_ok("Start a new timeline?##level", clicked) && port_goto_possible()) {
+        studio_goto_level(levelPick);
     }
     if (!canGo) {
         ImGui::TextDisabled("This works in a level and in the title menu.");
@@ -727,13 +1112,17 @@ void studio_level_window() {
     ImGui::End();
 }
 
-/* State files in the folder studio/states/ of the preference folder: a name box to save, a list to load from. */
+/* State files and route files in studio/states/ and studio/routes/ of the preference folder: a name box to save,
+   lists to load from. */
 void studio_states_window() {
     static char name[101];
     static char message[700];
     static char names[256][128];
+    static char routes[256][128];
     static int count = -1;
+    static int routeCount = 0;
     static int selected = -1;
+    static int routeSelected = -1;
     /* Whether a state file has the name in the box. It is checked again when the name changes or a file is saved. */
     static char checkedName[sizeof(name)] = "";
     static int nameExists = -1;
@@ -741,19 +1130,24 @@ void studio_states_window() {
     char path[1024];
     StudioInfo in;
     int i;
+    bool loadClicked;
+    bool routeClicked;
 
-    if (!ImGui::Begin("States", &win.studioStates, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!begin_kept("States", &cfg->studioStates, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
+    place_window("States", ImVec2(20, 40));
     if (count < 0 || ImGui::IsWindowAppearing()) {
         count = studio_list_states(names, 256);
+        routeCount = studio_list_routes(routes, 256);
         selected = -1;
+        routeSelected = -1;
     }
     studio_info(&in);
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
     ImGui::TextUnformatted("A state holds the game's memory at one frame: do not share it. Only this build of the "
-                           "studio loads it.");
+                           "studio loads it. A route holds only the inputs.");
     ImGui::SetNextItemWidth(220.0f);
     ImGui::InputTextWithHint("##name", "name", name, sizeof(name));
     ImGui::SameLine();
@@ -766,15 +1160,26 @@ void studio_states_window() {
             nameExists = -1;
         }
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Save the route")) {
+        if (studio_save_route(name, message, sizeof(message)) == 0) {
+            snprintf(message, sizeof(message), "Saved the route of %ld frames as %s.", in.length, name);
+            routeCount = studio_list_routes(routes, 256);
+            routeSelected = -1;
+        }
+    }
     if (nameExists < 0 || strcmp(checkedName, name) != 0) {
         snprintf(checkedName, sizeof(checkedName), "%s", name);
         nameExists = studio_state_exists(name);
     }
+    /* The line keeps its place when it is empty: the list below does not move. */
     if (nameExists) {
         ImGui::TextDisabled("Save state replaces the state of that name.");
+    } else {
+        ImGui::TextUnformatted(" ");
     }
     ImGui::Separator();
-    if (ImGui::BeginListBox("##states", ImVec2(320.0f, 160.0f))) {
+    if (ImGui::BeginListBox("##states", ImVec2(320.0f, 130.0f))) {
         for (i = 0; i < count; i++) {
             if (ImGui::Selectable(names[i], selected == i)) {
                 selected = i;
@@ -785,21 +1190,44 @@ void studio_states_window() {
     if (selected < 0) {
         ImGui::BeginDisabled();
     }
-    if (ImGui::Button("Load state") && selected >= 0) {
+    loadClicked = ImGui::Button("Load state") && selected >= 0;
+    if (selected < 0) {
+        ImGui::EndDisabled();
+    }
+    if (new_timeline_ok("Start a new timeline?##state", loadClicked) && selected >= 0) {
         if (studio_listed_state_path(names[selected], path, sizeof(path)) == 0
             && studio_load_state(path, message, sizeof(message)) == 0) {
             snprintf(message, sizeof(message), "Loaded %s. The timeline starts again from it, paused.", names[selected]);
         }
     }
-    if (selected < 0) {
-        ImGui::EndDisabled();
-    }
     ImGui::SameLine();
-    if (ImGui::Button("Refresh the list")) {
+    if (ImGui::Button("Refresh the lists")) {
         count = studio_list_states(names, 256);
+        routeCount = studio_list_routes(routes, 256);
         selected = -1;
+        routeSelected = -1;
         nameExists = -1;
     }
+    ImGui::SeparatorText("Routes");
+    if (ImGui::BeginListBox("##routes", ImVec2(320.0f, 90.0f))) {
+        for (i = 0; i < routeCount; i++) {
+            if (ImGui::Selectable(routes[i], routeSelected == i)) {
+                routeSelected = i;
+            }
+        }
+        ImGui::EndListBox();
+    }
+    ImGui::BeginDisabled(routeSelected < 0);
+    routeClicked = ImGui::Button("Load the route") && routeSelected >= 0;
+    ImGui::EndDisabled();
+    if (new_timeline_ok("Replace the timeline?##route", routeClicked) && routeSelected >= 0) {
+        if (studio_load_route(routes[routeSelected], message, sizeof(message)) == 0) {
+            snprintf(message, sizeof(message), "Loaded the route %s. It plays from frame 0: press B.",
+                     routes[routeSelected]);
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("It must start where this timeline starts (%s).", studio_origin());
     if (message[0]) {
         ImGui::TextUnformatted(message);
     }
@@ -815,6 +1243,7 @@ void cheats_window() {
         ImGui::End();
         return;
     }
+    place_window("Cheats", ImVec2(20, 410));
     bool demo = port_space_demo() != 0;
 
     ImGui::TextUnformatted("These use the game's own cheats.");
@@ -826,6 +1255,7 @@ void cheats_window() {
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("In the game's pause menu, R or Z opens a list of all the cheats to switch with A.\n"
+                          "While it is open, the C buttons type no cheat code: B, R or Z closes it.\n"
                           "Off: R and Z do nothing there, as in the original game.");
     }
     ImGui::Separator();
@@ -837,7 +1267,8 @@ void cheats_window() {
               "The game's OPEN PORTALS and OPEN LEVELS cheats: every portal and bonus level in the hub is open.\n"
               "The save is not changed.");
     cheat_box("Level select", 23, 1, &cfg->levelSelect,
-              "The game's LEVEL SELECT cheat: the title menu shows the level select.");
+              "The game's LEVEL SELECT cheat: the title menu gets a level select entry. It has no label:\n"
+              "press Up from START, then A.");
     ImGui::SeparatorText("Go to level");
     static int levelPick = 0;
     ImGui::SetNextItemWidth(200.0f);
@@ -848,12 +1279,25 @@ void cheats_window() {
         ImGui::BeginDisabled();
     }
     if (ImGui::Button("Go")) {
-        port_goto_level(levelPick);
+        ImGui::OpenPopup("Go to level?");
     }
     if (!canGo) {
         ImGui::EndDisabled();
     }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    bool goHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+    if (ImGui::BeginPopupModal("Go to level?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Start %s now? The current level is left without saving.", levelNames[levelPick]);
+        if (ImGui::Button("Go") && port_goto_possible()) {
+            port_goto_level(levelPick);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (goHovered) {
         ImGui::SetTooltip("Starts the level at once, as the level select does (medium difficulty, save slot 6).\n"
                           "The current level is left without saving. Your save slots are not used.\n"
                           "It works in a level and in the title menu, not in the Space demo.");
@@ -1097,12 +1541,15 @@ void developer_window() {
         ImGui::End();
         return;
     }
+    place_window("Developer", ImVec2(250, 40));
     ImGui::Checkbox("Show FPS", &showFps);
     ImGui::Text("%.1f FPS, %.2f ms a frame", ImGui::GetIO().Framerate,
                 ImGui::GetIO().Framerate > 0.0f ? 1000.0f / ImGui::GetIO().Framerate : 0.0f);
     if (cfg->fpsCap > 0) {
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Unlimited is capped at %d FPS%s", cfg->fpsCap,
-                           cfg->physicsMode == PHYSICS_ORIGINAL ? "" : " (10 times the game's rate)");
+        ImGui::TextDisabled("Unlimited stops at %d FPS%s", cfg->fpsCap,
+                            cfg->physicsMode != PHYSICS_ORIGINAL ? " (10 times the game's rate)" : "");
+    } else if (cfg->maxFps == 0 && cfg->vsync) {
+        ImGui::TextDisabled("VSync sets the rate.");
     }
     ImGui::SeparatorText("Log");
     bool logging = plog_file_active() != 0;
@@ -1272,6 +1719,7 @@ void log_window() {
         ImGui::End();
         return;
     }
+    place_window("Log", ImVec2(20, 440));
     if (ImGui::Button("Clear")) {
         plog_ring_clear();
     }
@@ -1296,6 +1744,16 @@ void log_window() {
     ImGui::End();
 }
 
+/* A menu item for a window that the settings keep open or closed. */
+void menu_toggle(const char *label, int *setting) {
+    bool on = *setting != 0;
+
+    if (ImGui::MenuItem(label, NULL, &on)) {
+        *setting = on;
+        settingsDirty = true;
+    }
+}
+
 void menu_bar() {
     if (!ImGui::BeginMainMenuBar()) {
         return;
@@ -1312,19 +1770,18 @@ void menu_bar() {
         if (ImGui::MenuItem("Pause", "all C buttons", studio_paused() != 0)) {
             studio_set_paused(!studio_paused());
         }
-        ImGui::MenuItem("Start a level", NULL, &win.studioLevel);
-        ImGui::MenuItem("Save and load states", NULL, &win.studioStates);
+        ImGui::Separator();
+        /* The windows' choices are kept in settings.ini. */
+        menu_toggle("Points and search", &cfg->studioSearch);
+        menu_toggle("Input display", &cfg->studioInput);
+        menu_toggle("Start a level", &cfg->studioLevel);
+        menu_toggle("Save and load states", &cfg->studioStates);
         ImGui::EndMenu();
     }
 #else
-    if (ImGui::BeginMenu("Enhancements")) {
-        ImGui::MenuItem("Enhancements", NULL, &win.enhancements);
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Cheats")) {
-        ImGui::MenuItem("Cheats", NULL, &win.cheats);
-        ImGui::EndMenu();
-    }
+    /* One click opens each of these windows: they are items of the bar itself. */
+    ImGui::MenuItem("Enhancements", NULL, &win.enhancements);
+    ImGui::MenuItem("Cheats", NULL, &win.cheats);
 #endif
     if (ImGui::BeginMenu("Developer")) {
         ImGui::MenuItem("Developer tools", NULL, &win.developer);
@@ -1538,10 +1995,20 @@ int menu_is_open(void) {
     return menuOpen;
 }
 
+void menu_notice(const char *text) {
+    show_notice(text);
+}
+
+void menu_settings_changed(void) {
+    settingsDirty = true;
+}
+
 void menu_draw(SDL_Window *window) {
     frameCount++;
     if (testFrames >= 0 && frameCount == testFrames) {
-        /* WEEMITT_MENU_WINDOWS=none keeps the menu closed and =developer opens only the Developer window. */
+        /* WEEMITT_MENU_WINDOWS=none keeps the menu closed and =developer opens only the Developer window. A list
+           such as graphics,audio,cheats opens those windows (also controls, enhancements, log, and in the studio
+           level and states). */
         const char *which = getenv("WEEMITT_MENU_WINDOWS");
         /* WEEMITT_OVERLAYS=collision,depth,names,pause turns the Developer window's tools on. */
         const char *tools = getenv("WEEMITT_OVERLAYS");
@@ -1550,6 +2017,15 @@ void menu_draw(SDL_Window *window) {
             set_open(true);
             if (which != NULL && !strcmp(which, "developer")) {
                 win.developer = true;
+            } else if (which != NULL && strchr(which, ',') != NULL) {
+                win.graphics = strstr(which, "graphics") != NULL;
+                win.audio = strstr(which, "audio") != NULL;
+                win.controls = strstr(which, "controls") != NULL;
+                win.enhancements = strstr(which, "enhancements") != NULL;
+                win.cheats = strstr(which, "cheats") != NULL;
+                win.log = strstr(which, "log") != NULL;
+                cfg->studioLevel = strstr(which, "level") != NULL;
+                cfg->studioStates = strstr(which, "states") != NULL;
             } else {
                 win.graphics = win.audio = win.controls = win.enhancements = win.cheats = win.developer = win.log = true;
                 showFps = true;
@@ -1563,13 +2039,14 @@ void menu_draw(SDL_Window *window) {
         }
         plog_printf("menu test: the log window shows the latest lines");
     }
+    bool notice = noticeText[0] && SDL_GetTicks() < noticeUntil;
 #ifdef PORT_STUDIO
     if (!menuOpen && !showFps && !rec_active() && !cfg->showNames && !cfg->pauseLogic && testFrames < 0
-        && !studio_paused()) {
+        && !studio_paused() && !notice) {
         return;
     }
 #else
-    if (!menuOpen && !showFps && !rec_active() && !cfg->showNames && !cfg->pauseLogic && testFrames < 0) {
+    if (!menuOpen && !showFps && !rec_active() && !cfg->showNames && !cfg->pauseLogic && testFrames < 0 && !notice) {
         return;
     }
 #endif
@@ -1593,21 +2070,23 @@ void menu_draw(SDL_Window *window) {
         if (win.developer) developer_window();
         if (win.log) log_window();
 #ifdef PORT_STUDIO
-        if (win.studioLevel) studio_level_window();
-        if (win.studioStates) studio_states_window();
+        if (cfg->studioLevel) studio_level_window();
+        if (cfg->studioStates) studio_states_window();
 #endif
     }
 #ifdef PORT_STUDIO
     if (menuOpen || studio_paused()) {
         studio_bar();
-        studio_search_window();
+        if (cfg->studioSearch) studio_search_window();
+        if (cfg->studioInput) studio_input_window();
     }
 #endif
     if (showFps) {
         char text[48];
 
         snprintf(text, sizeof(text), cfg->fpsCap > 0 ? "%.0f FPS (cap %d)" : "%.0f FPS", ImGui::GetIO().Framerate, cfg->fpsCap);
-        ImGui::GetForegroundDrawList()->AddText(ImVec2(8, menuOpen ? 28.0f : 6.0f), IM_COL32(255, 255, 0, 255), text);
+        /* The overlay texts lie under the menu's windows (the background list). */
+        ImGui::GetBackgroundDrawList()->AddText(ImVec2(8, menuOpen ? 28.0f : 6.0f), IM_COL32(255, 255, 0, 255), text);
     }
     if (cfg->showNames) {
         draw_object_names();
@@ -1620,24 +2099,53 @@ void menu_draw(SDL_Window *window) {
 
         snprintf(text, sizeof(text), "PAUSED   %s: step   %s: resume", key_name(cfg->stepKey), key_name(cfg->pauseKey));
         textSize = ImGui::CalcTextSize(text);
-        ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2((size.x - textSize.x) * 0.5f - 6.0f, top),
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2((size.x - textSize.x) * 0.5f - 6.0f, top),
                                                       ImVec2((size.x + textSize.x) * 0.5f + 6.0f, top + textSize.y + 4.0f),
                                                       IM_COL32(0, 0, 0, 170), 3.0f);
-        ImGui::GetForegroundDrawList()->AddText(ImVec2((size.x - textSize.x) * 0.5f, top + 2.0f), IM_COL32(255, 200, 60, 255), text);
+        ImGui::GetBackgroundDrawList()->AddText(ImVec2((size.x - textSize.x) * 0.5f, top + 2.0f), IM_COL32(255, 200, 60, 255), text);
     }
     if (rec_active()) {
         /* The marker sits at the right edge, so it never covers the FPS text. */
         float x = ImGui::GetIO().DisplaySize.x - 44.0f;
 
-        ImGui::GetForegroundDrawList()->AddCircleFilled(ImVec2(x, menuOpen ? 36.0f : 14.0f), 5.0f, IM_COL32(230, 30, 30, 255));
-        ImGui::GetForegroundDrawList()->AddText(ImVec2(x + 10.0f, menuOpen ? 28.0f : 6.0f), IM_COL32(255, 255, 255, 255), "REC");
+        ImGui::GetBackgroundDrawList()->AddCircleFilled(ImVec2(x, menuOpen ? 36.0f : 14.0f), 5.0f, IM_COL32(230, 30, 30, 255));
+        ImGui::GetBackgroundDrawList()->AddText(ImVec2(x + 10.0f, menuOpen ? 28.0f : 6.0f), IM_COL32(255, 255, 255, 255), "REC");
+    }
+    if (notice) {
+        /* menu_notice: a line in a box at the top middle, over everything. */
+        ImVec2 size = ImGui::GetIO().DisplaySize;
+        ImVec2 textSize = ImGui::CalcTextSize(noticeText);
+        float top = 30.0f;
+
+        ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2((size.x - textSize.x) * 0.5f - 8.0f, top),
+                                                      ImVec2((size.x + textSize.x) * 0.5f + 8.0f, top + textSize.y + 8.0f),
+                                                      IM_COL32(60, 20, 20, 230), 4.0f);
+        ImGui::GetForegroundDrawList()->AddText(ImVec2((size.x - textSize.x) * 0.5f, top + 4.0f),
+                                                IM_COL32(255, 230, 200, 255), noticeText);
     }
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     if (testFrames >= 0 && frameCount == testFrames + 3) {
         int w, h;
+        const char *rects = getenv("WEEMITT_MENU_RECTS");
+
         SDL_GL_GetDrawableSize(window, &w, &h);
         save_test_shot(w, h);
+        if (rects != NULL) {
+            /* Test option: the menu's windows as "NAME X Y W H" lines, after a "display W H" line. */
+            FILE *f = fopen(rects, "w");
+
+            if (f != NULL) {
+                fprintf(f, "display %.0f %.0f\n", ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+                for (int i = 0; i < placedCount; i++) {
+                    if (placed[i].frame >= frameCount - 1) {
+                        fprintf(f, "%s|%.0f %.0f %.0f %.0f\n", placed[i].name, placed[i].pos.x, placed[i].pos.y,
+                                placed[i].size.x, placed[i].size.y);
+                    }
+                }
+                fclose(f);
+            }
+        }
         SDL_Event q;
         q.type = SDL_QUIT;
         SDL_PushEvent(&q);

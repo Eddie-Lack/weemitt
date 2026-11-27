@@ -1,9 +1,17 @@
 # The in-game menu
 
 Press Escape in a window build to open or close the menu. It is made with Dear ImGui (1.90.1, MIT, in
-`third_party/imgui`, see its README). The game keeps running while the menu is open. The menu takes the keyboard
-and the mouse: the game gets no keyboard buttons, but a game controller still works. F11 and Alt+Enter still switch
-full screen.
+`third_party/imgui`, see its README). The game keeps running while the menu is open, unless Settings, Graphics,
+Pause while the menu is open is on. The menu takes the keyboard and the mouse: the game gets no keyboard buttons, but
+a game controller still works. F11 and Alt+Enter still switch full screen. Alt+Enter's Return never reaches the game.
+[playing.md](playing.md) is the guide for players.
+
+A window opens at its own place when that is free. Otherwise it opens at the first free place that holds it, with
+no other window over it, below the menu bar (`place_window` in `menu.cpp`). When no free place is left, it opens at
+its own place. Every window is kept inside the game window, also when the game window gets smaller. Enhancements and
+Cheats are items of the menu bar itself: one click opens the window. A short notice at the top of the window
+(`menu_notice`) shows for six seconds, also while the menu is closed. The program uses it when the save or the
+settings cannot be written, and when an input recording cannot start.
 
 ## Files
 
@@ -30,8 +38,23 @@ window loop reads it: the frame-rate limit each frame, the key mapping in `read_
   drawn frame, at any of these rates (see [delta-time.md](delta-time.md)). Original (interpolated) runs the logic as on
   the N64, 20 whole updates a second in a level and 30 in a menu, and blends the previous and the latest update when it
   draws (see [interpolation.md](interpolation.md)). Glitches that need whole frames, such as wall clips, work in the
-  Original mode. The limit and VSync apply to drawing in both. The choice is saved as `physics_mode`, and the default
-  is Original. A change from one mode to the other takes effect at once, in a level and in a menu.
+  Original mode. Original (no blending) runs the same logic, and each drawn frame shows the latest game frame, as the
+  N64 does: no delay is added. It is the same as `--fixed`, and a recording made with it says so. The limit and VSync
+  apply to drawing in all three. The choice is saved as `physics_mode` (0, 1 or 2), and the default is Original. A
+  change from one mode to another takes effect at once, in a level and in a menu.
+- Settings, Graphics, Window:
+  - Full screen: the same as F11 and Alt+Enter. The choice is saved as `fullscreen`. The window's size and place
+    while it is not full screen are saved as `window_x`, `window_y`, `window_w` and `window_h`. The next start opens
+    the window there, when that place is still on a display. `--fullscreen` and `WEEMITT_WINDOW_SIZE` act for one run.
+  - Pause while the menu is open (`pause_menu`, off by default): the game's logic waits while the menu is open.
+  - Pause when the window loses focus (`pause_unfocused`, off by default): the logic waits while another window is
+    active.
+  Both act as Developer, Pause game logic does, without the PAUSED text: in the Smooth mode the logic stops at the
+  end of the original frame in progress. The sound player runs on real time, so the music goes on. No step runs
+  while either holds the game.
+- The mouse cursor hides over the game after 2 seconds without a move. It shows while the menu or the studio's bar
+  is open. The window's icon (a glove on a ball) is drawn from a small map in `platform.c`: it holds nothing from the
+  ROM.
 - Settings, Graphics, Image options. All four are saved in `settings.ini` and take effect at once. The defaults give
   the look of the build without the options (a screenshot at the defaults is identical, pixel for pixel).
   - Resolution scale (`render_scale`, 50 to 400%, default 100): the renderer draws the picture into an offscreen frame
@@ -63,8 +86,10 @@ window loop reads it: the frame-rate limit each frame, the key mapping in `read_
     star wipe at the start and end of a level covers only the middle, so the world shows beside it.
 - Settings, Controls has two tabs. Keyboard: every input that the keyboard drives (A, B, Z, Start, L, R, the C buttons,
   the D-pad and the four directions of the stick) has two keys. Click a key button, then press the new key. Escape
-  cancels. A right-click clears the key. A key belongs to one input: binding it takes it from the input that had it.
-  Reset to defaults restores the original mapping (arrow keys and WASD for the stick, Space for A, and so on).
+  cancels. A right-click clears the key. A key belongs to one input: binding it takes it from the input that had it,
+  and a line at the top of the window says so for six seconds ("K was moved from C-Down to A."). Reset to defaults
+  asks first, then restores the original mapping (arrow keys and WASD for the stick, Space for A, and so on;
+  [playing.md](playing.md) lists them).
 - Controller: the same inputs, two bindings each. Click a slot, then press a controller button or move a trigger or
   a stick past about 60% (axes bind per direction). Escape cancels, a right-click clears, and a binding belongs to one
   input. The defaults: A is A, B is B and X, Z is the left trigger, Start is Start, L is the left shoulder, R is the
@@ -136,11 +161,15 @@ window loop reads it: the frame-rate limit each frame, the key mapping in `read_
   `--replay` (see [testing.md](testing.md#recording-and-replay)). The file holds the save and no ROM data. `--record FILE`
   records one run without the setting.
 - Developer: Show FPS (an overlay) and the frame rate and frame time. When Unlimited is chosen, both show the cap
-  (see the next section).
+  (see the next section). With VSync on and a display slower than the cap, VSync sets the rate and no cap shows. The
+  FPS, PAUSED and REC texts lie under the menu's windows.
 - Developer, Frame step, Show collision and Show object names: see "The Developer tools" below.
 - Developer, Game debug: the debug code that the retail game still holds. See "Game debug" below.
 
-- Settings, Audio, Master volume: 0 to 100% of the game's own level, 20% by default. The sound callback in
+- Settings, Audio: when there is no sound, a line at the top of the window says why (no sound device, `--no-sound`,
+  or a build without the sound player).
+- Settings, Audio, Master volume: 0 to 100% of the game's own level, 20% by default. The game's own level is loud next
+  to other programs, and the tooltip says so. The sound callback in
   `platform.c` scales every sample after the sound player has mixed them. The game's logic does not see it.
 - Settings, Audio, Music volume and Effects volume: 0 to 100%, both 100% by default (saved as `music_volume` and
   `effects_volume`). They are shares of the master volume. libmus gives every channel one synthesizer voice, and a
@@ -179,17 +208,17 @@ window loop reads it: the frame-rate limit each frame, the key mapping in `read_
     reads them where it decides which portals and bonus levels are open. The save is not changed: this is a memory
     option and nothing is written unless the player saves. The cheats are not stored in a save slot.
   - Level select (`level_select`, `--level-select`): cheat 23, LEVEL SELECT. The title menu reads it (`title.c`) and
-    shows its level select entry.
+    allows its level select entry. The entry has no label: press Up from START, then A, to reach SELECT LEVEL.
   - Go to level: a list of the game's levels 0 to 41 (hubs, the cave, the assault course, the six worlds' levels,
     bosses and bonus levels) and a Go button. It starts the level at the next update the way the level select does
     (save slot 6, medium difficulty, `StartLevelNow` in `frame.c`), from a level or from the title menu. A running level
     is freed first, the pause state and the pause menu's cheat list are reset, and a recorded demo is stopped. The
     result is the same as `--level N` (the trace of level 20 from frame 0 matches the one of a level 5 run that
     went to level 20 after 200 frames, bit for bit). The button is disabled in the Space demo and in the screens
-    between levels. It does not use or change the player's save.
+    between levels. It asks first. It does not use or change the player's save.
   - Headless: `--infinite-lives`, `--infinite-health`, `--unlock-all`, `--level-select`, `--skip-intro` and
-    `--goto-level FRAME LEVEL` (start the level at original frame FRAME). They work in a window build too, and add to
-    the saved settings. A recording does not hold these options (only easy ball and camera follow speed): replay one
+    `--goto-level FRAME LEVEL` (start the level at original frame FRAME). They work in a window build too, for that
+    run only: `settings.ini` keeps its own values. A recording does not hold these options (only easy ball and camera follow speed): replay one
     that was made with cheats on by giving the same options.
 
 ## The Developer tools
@@ -402,12 +431,37 @@ frames. It tests the handler.
 
 ## settings.ini
 
-The file is in the save folder (SDL's preference path, `weemitt/Glover/`). It is written when the menu closes and
-when the program ends, only after a setting changed. Keys are SDL scancode numbers (4 is A, 44 is Space), two
-per input, separated by a bar; 0 means no key. `pad.NAME` lines hold the controller bindings in the same form (1 plus the SDL button, or 100 plus twice the SDL axis, plus 1 for the positive direction). `joy.NAME` lines hold the raw joystick bindings: 1 plus the button number, 100 plus twice the axis number (plus 1 for the positive direction), or 200 plus 4 times the hat number plus the direction (0 up, 1 down, 2 left, 3 right). `stick_dead` and `stick_range` are percents. The `[debug]` section holds `step_key` and `pause_key` (SDL scancodes, 0 for
-none) and `debug_range` (the range of the Developer overlays). Other keys: `master_volume`, `music_volume`, `effects_volume` (0 to 100), `mute_unfocused`, `skip_intro`, `infinite_lives`, `infinite_health`, `unlock_all`, `level_select`, `pause_cheats` (0 or 1, in the `[play]` section), `physics_mode` (0 Smooth, 1 Original), `easy_ball`, `ballworld` (0 or 1), `camera_follow` (1.0 to 3.0), `log_file`, `log_verbose`, `record_input` (0 or 1). The command-line options `--no-vsync`,
-`--max-fps N`, `--easy-ball`, `--ballworld`, `--camera-follow N`, `--original-physics`, `--smooth-physics`, `--skip-intro` and the four cheat options override the file for that run. `--record FILE` records that run whatever `record_input` says. The headless mode neither reads nor writes it.
-The picture options are `render_scale`, `msaa`, `texture_filter` and `widescreen` (values in the Graphics bullet above). `--render-scale N`, `--msaa N`, `--texture-filter n64|bilinear|nearest` and `--widescreen off|stretch|horplus` override them for that run, as do `--max-fps N`, `--easy-ball`, `--camera-follow N`, `--original-physics` and `--smooth-physics` override the file for that run. `--record FILE` records that run whatever `record_input` says. The headless mode neither reads nor writes it.
+The file is in the save folder (SDL's preference path, `weemitt/Glover/`: [playing.md](playing.md) gives the folder
+on each system). Without a preference folder it is in the working folder, as the save is, and the log says so. It is
+written when the menu closes and when the program ends, only after a setting changed. A write that fails goes to the
+log and shows a notice once.
+
+Its sections:
+
+| Section | Keys |
+| --- | --- |
+| `[graphics]` | `physics_mode` (0 Smooth, 1 Original, 2 Original with no blending), `vsync`, `max_fps` |
+| `[window]` | `fullscreen`, `window_x`, `window_y`, `window_w`, `window_h` (`window_w` 0: the default size), `pause_menu`, `pause_unfocused` |
+| `[enhancements]` | `easy_ball`, `ballworld` (0 or 1), `camera_follow` (1.0 to 3.0) |
+| `[audio]` | `master_volume`, `music_volume`, `effects_volume` (0 to 100), `mute_unfocused` |
+| `[developer]` | `log_file`, `log_verbose`, `record_input` (0 or 1) |
+| `[controller]` | `stick_dead`, `stick_range` (percents) |
+| `[play]` | `skip_intro`, `infinite_lives`, `infinite_health`, `unlock_all`, `level_select`, `pause_cheats` (0 or 1) |
+| `[studio]` | `studio_search`, `studio_input`, `studio_level`, `studio_states`: the studio's windows that show. Every build keeps them |
+| `[keys]` | `key.NAME`: SDL scancode numbers (4 is A, 44 is Space), two per input, separated by a bar; 0 means no key |
+| `[image]` | `render_scale`, `msaa`, `texture_filter`, `widescreen` (values in the Graphics bullet above) |
+| `[pads]` | `pad.NAME`: 1 plus the SDL button, or 100 plus twice the SDL axis, plus 1 for the positive direction |
+| `[joys]` | `joy.NAME`: 1 plus the button number, 100 plus twice the axis number (plus 1 for the positive direction), or 200 plus 4 times the hat number plus the direction (0 up, 1 down, 2 left, 3 right) |
+| `[debug]` | `step_key`, `pause_key` (SDL scancodes, 0 for none), `debug_range`, `collision_types` |
+
+The reader looks at each `name=value` line by its name. The sections only make the file easier to read.
+
+The command-line options act for one run and never change the file: `--no-vsync`, `--max-fps N`, `--original-physics`,
+`--smooth-physics`, `--fullscreen`, `--easy-ball`, `--ballworld`, `--camera-follow N`, `--skip-intro`, the four cheat
+options, `--render-scale N`, `--msaa N`, `--texture-filter n64|bilinear|nearest` and `--widescreen
+off|stretch|horplus`. When the program saves, each setting that did not change during the run keeps the file's own
+value (`settings_keep_file` in `settings.c`). A setting that the menu changed is saved. `--record FILE` records that
+run whatever `record_input` says. The headless mode neither reads nor writes the file.
 
 ## Why the headless build has no menu
 
@@ -479,7 +533,7 @@ is the spell itself, because a spell that ended or came from a pick-up leaves th
   off state. ALL CHEATS OFF turns every other cheat off.
 - `--`: the cheat is refused now (`CheatAllowed`: for example CONTROL BALL while the glove holds the ball, or the
   death and frog spells in a boss level), or it is locked. In the Space demo, INFINITE LIVES and ALL CHEATS OFF are
-  locked because the demo sets that cheat itself (`spacedemo.c`).
+  locked because the demo sets that cheat itself (`src/port/spacedemo.c`).
 - LOCATE GARIBS is on from the start on the easy difficulty. Turning it off there changes the bit only: the game
   allows the garib locator on easy anyway.
 - The spell cheats replace one another, as the pick-ups do. Switching on a second one turns the first off.
@@ -491,7 +545,10 @@ is the spell itself, because a spell that ended or came from a pick-up leaves th
 The panel's state is in `cheat.c` (`CheatMenuOpen`, `CheatMenuUpdate`), outside the game's memory. Its counters step
 in ticks like the pause menu's.
 
-The panel is a change to the game that the controller can reach. With it on, a press of R or Z in the pause menu
-opens the panel and the game does not see it. The game's own cheat code entry then never gets those presses. The
+The panel is a change to the game that the controller can reach. It stays on by default: the headless runs and the
+regression check use the default settings. With it on, a press of R or Z in the pause menu opens the panel. Z still
+clears a half-typed code first, as on the N64 (`CheckForCheats` runs before the panel opens). While the panel is
+open, the C buttons type no code: close it with B, R or Z to type a code. A player who types codes as on the N64 can
+turn the box off. The
 brute forcer turns the panel off (`OFF0(CheatMenuAvailable)` in `bruteforce/engine/hooks.def`). weemitt has no single
 option that turns off every such addition. A later addition that the controller can reach needs its own switch.

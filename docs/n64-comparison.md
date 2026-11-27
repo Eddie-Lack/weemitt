@@ -11,16 +11,17 @@ The compared state is the port's `--trace` line: frameCount, mode, level, the ra
 the glove, the ball and the camera, bit for bit.
 
 - Most of the run matches bit for bit. The glove, ball and camera follow the same paths in every demo.
-- Two bugs in the port change the game. A byte-order bug in the level parser garbles the vectors of some puzzle
-  actions; it moves the camera to a wrong place at the end of the level 20 and level 30 demos. The order of the
-  three steps in the port's frame makes a fade that the controller step starts (the end of a demo) one frame
-  late, so each demo lasts one frame longer than on the N64.
-- Five calls pass two calls of `Random` as arguments. x86 GCC evaluates them in the other order. Only sounds and
-  effects differ, not the traced state.
-- `guRotateF` in `src/port/gu.c` does not compute what the N64's does. The glove uses it while it swings
-  (`HAND_SWISH`). The attract mode does not use it.
-- What remains comes from the N64's thread timing: the screen fade in the first frames of each level, and the
-  second fly-through, where the N64 itself does not repeat its first fly-through. The port repeats it exactly.
+- The comparison found five bugs in the port. All five are fixed in the port now:
+  - a byte-order bug in the level parser that garbled the vectors of some puzzle actions (divergence 1);
+  - the order of the three steps in the port's frame, which made each demo one frame longer (divergence 2);
+  - five calls that passed two calls of `Random` as arguments, in the other order on x86 (divergence 3);
+  - `guRotateF` and `guMtxCatF` in `src/port/gu.c`, which did not compute what the N64's do ("Other parts of the
+    port", below).
+- What still differs comes from the N64's thread timing: the screen fade in the first frames of each level, and
+  the second fly-through, where the N64 itself does not repeat its first fly-through. The port repeats it exactly.
+
+The results below were measured before and after the fixes for divergences 1 and 2. The comparison has not been
+run again since then.
 
 ## How to run the comparison
 
@@ -33,8 +34,8 @@ display: `Xvfb :99 -screen 0 1024x768x24 &`. The scripts find gloveworld in `../
 python3 tools/n64ref/emu.py --frames 21000 --out n64.txt
 
 # The port: the same lines, from a gdb breakpoint. A few seconds.
-make RENDERER=null -j4
-python3 tools/n64ref/native.py --frames 21000 --out native.txt
+make headless -j4
+python3 tools/n64ref/native.py --binary build/headless/weemitt --frames 21000 --out native.txt
 
 # Part by part: the first frame where a field differs.
 python3 tools/n64ref/compare.py n64.txt native.txt [--extra] [--context 5]
@@ -104,7 +105,7 @@ seconds. The first record is numbered from frameCount, which counts RunGame's fr
 
 The N64 trace and the port's trace start in the same state. Frame numbers below are the N64's.
 
-### The current port
+### Before the fixes
 
 | Part | N64 frames | Port | First difference |
 | --- | --- | --- | --- |
@@ -126,7 +127,7 @@ Every part after the presentation starts one frame later in the port than on the
 after each demo. Each demo lasts one frame longer in the port (divergence 2). The menus between the demos last
 603 frames in both.
 
-### With the fixes for divergences 1 and 2
+### With the fixes for divergences 1 and 2 (the port now)
 
 Every part has the same frames as on the N64: the same first frame, the same length. The positions, the random
 seed and frameCount are the same in every frame, except in the second fly-through and the menu after it. With
@@ -163,7 +164,8 @@ numbers, and the menu after the demo differs in the random seed. Level 30 shows 
 at offset 0x14. The same bug moves platforms (`MOVE_PLAT`, conveyors), enemies (`ADD_NME`) and dropped pickups
 in levels the attract mode does not show.
 
-Fix: in src/game/parse.c line 886, read the 12 bytes as three 32-bit values:
+Fixed: src/game/parse.c now reads the 12 bytes as three 32-bit values (`port_copy_from_data(..., 12, 4)`). The fix
+was:
 
 ```c
                 if (type == 17 || type == 18 || type == 19 || type == 14 || type == 15 || type == 16 || type == 8) {
@@ -190,7 +192,8 @@ Evidence: at the end of the level 10 demo the N64's fade at frameCount 1207 is 5
 frame later. With the order changed, all 25 parts of the 21000 frames have the same first frame and length as
 on the N64.
 
-Fix: in `port_game_update` (src/port/frame.c), run the graphics step before the game step:
+Fixed: `port_game_update` (src/port/frame.c) now runs the controller step, then the graphics step, then the game
+step. The fix was:
 
 ```c
     if (deltaTick) {
@@ -227,7 +230,7 @@ the other arguments. Checked in the ROM's code and the port's code:
 The `Random` logs found the first: the thunder in the level 30 demo (call 118438) takes `Random(56)` before
 `Random(40)`.
 
-Fix: evaluate the calls in the N64's order into locals before the call, for example in weather.c:
+Fixed: the calls are evaluated in the N64's order into locals before the call. In weather.c:
 
 ```c
         vol = Random(40) + 80;
@@ -293,7 +296,7 @@ The comparison cannot settle it further.
 
 ### Other parts of the port that the attract mode does not test
 
-- `guRotateF` (src/port/gu.c:116) uses the C library's double `sin` and `cos` and its own formula. The ROM's
+- `guRotateF` (src/port/gu.c) used the C library's double `sin` and `cos` and its own formula. The ROM's
   (0x801C5B90) calls `guNormalize` (multiplies by `1.0f / sqrtf(x*x + y*y + z*z)`), multiplies the angle by the
   float 0.017453292 (π/180), takes libultra's `__sinf` and `__cosf` (the port's `port_sinf` and `port_cosf`),
   computes `ab = x*y*t`, `bc = y*z*t`, `ca = z*x*t` with `t = 1 - cos`, and sets `mf[0][0] = x*x + cos*(1 - x*x)`,
@@ -301,10 +304,11 @@ The comparison cannot settle it further.
   `mf[1][2] = bc + x*sin`, `mf[2][0] = ca + y*sin`, `mf[2][1] = bc - x*sin`, `mf[2][2] = z*z + cos*(1 - z*z)`,
   the rest from `guMtxIdentF`, all in single precision in that order. `HandSwish` (src/game/object.c) builds
   `hand.rotQuat` with `guRotateF(rot, 180.0f, 0, 1, 0)`; there `sin` is about -8.7e-8 on the N64 and 1.2e-16 in the
-  port, so the glove's swing on a rope comes out slightly different. Fix: write `guRotateF` as above.
-- `guMtxCatF` (src/port/gu.c:58) adds the four products in the N64's order, but the ROM's starts each sum from
+  port, so the glove's swing on a rope came out slightly different. Fixed: `guRotateF` now follows the ROM as
+  above.
+- `guMtxCatF` (src/port/gu.c) added the four products in the N64's order, but the ROM's starts each sum from
   0.0. They differ only when every product is -0.0: the N64 gives +0.0. Collision spheres and platform positions
-  come from this function. Starting each sum from `0.0f` makes it exact.
+  come from this function. Fixed: each sum now starts from `0.0f`.
 - `guMtxXFMF`, `guTranslateF`, `guScaleF` and `guMtxIdentF` compute what the ROM's do. `guLookAtF`,
   `guPerspectiveF`, `guMtxF2L`, `guMtxL2F` and the sprite functions (src/port/sprite.c) only feed the display
   lists and the overlays' screen positions, and were not compared.

@@ -1,9 +1,15 @@
 /* The platform layer: the program's entry point, the window and OpenGL context (SDL2), the controller, the save
    file, the frame pacing, and a headless mode for tests. It sees the game only through frame.h. */
 #include <SDL2/SDL.h>
+#include <ctype.h>
+#include <dirent.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "frame.h"
 #include "ptr32.h"
 #include "log.h"
@@ -38,6 +44,7 @@ typedef struct Options {
     const char *inputScript; /* headless: "frame:buttons:x:y" lines */
     int hashRam;             /* headless: print a hash of the game's memory every hashRam frames (0: never) */
     long level;              /* start this level directly, as the level select does (-1: the normal start) */
+    int levelGiven;          /* --level was given (a replay takes the level from the recording) */
     int trace;               /* headless: print the game's state after each frame (port_game_trace) */
     int fixedRate;           /* run the game at the N64's own rate (20 or 30 frames a second) */
     double dt;               /* headless: the length of each update in original frames (default 1) */
@@ -114,15 +121,63 @@ unsigned long long port_time_us(void) {
     return (SDL_GetPerformanceCounter() - timeBase) * 1000000ULL / SDL_GetPerformanceFrequency();
 }
 
+/* The message box doesn't wrap its text: a line longer than the screen is cut at both ends. A long line breaks after
+   a space or a path's slash, at most every BOX_WIDTH characters. */
+#define BOX_WIDTH 70
+static void wrap_box(char *out, size_t size, const char *in) {
+    size_t n = 0, col = 0;
+
+    for (; *in != 0 && n + 2 < size; in++) {
+        out[n++] = *in;
+        col = *in == '\n' ? 0 : col + 1;
+        if (col >= BOX_WIDTH / 2 && (*in == ' ' || *in == '/' || *in == '\\')) {
+            /* Break here when the next word or folder would pass the width. */
+            size_t next = strcspn(in + 1, " /\\\n");
+
+            if (col + next >= BOX_WIDTH || col >= BOX_WIDTH) {
+                out[n++] = '\n';
+                col = 0;
+            }
+        } else if (col >= BOX_WIDTH + 20) {
+            out[n++] = '\n';
+            col = 0;
+        }
+    }
+    out[n] = 0;
+}
+
+/* Shows an error box (not in the headless mode) and exits with the code. */
+static int noBox; /* a command line mistake in a run without a window: no box */
+
+static void die_code(int code, const char *msg) {
+    char box[1800];
+
+    plog_printf("weemitt: %s", msg);
+    if (opt.headlessFrames == 0 && !noBox) {
+#ifndef _WIN32
+        /* SDL turns these signals into a quit event, which nothing reads while the box is open. */
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+#endif
+        wrap_box(box, sizeof(box), msg);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Glover", box, NULL);
+    }
+    exit(code);
+}
+
 static void die(const char *fmt, const char *arg) {
-    char msg[512];
+    char msg[1600];
 
     snprintf(msg, sizeof(msg), fmt, arg);
-    plog_printf("weemitt: %s", msg);
-    if (opt.headlessFrames == 0) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Glover", msg, NULL);
-    }
-    exit(1);
+    die_code(1, msg);
+}
+
+/* The game's fatal error (port_fatal in libultra.c) in a window: the box shows its message. */
+static void fatal_box(void) {
+    char msg[1100];
+
+    snprintf(msg, sizeof(msg), "The game stopped with an error: %s", port_fatal_message);
+    die_code(1, msg);
 }
 
 /* ---- The ROM. The game wants big-endian (.z64) byte order; .v64 swaps each pair of bytes and .n64 each word. */
@@ -157,36 +212,105 @@ static void load_rom(const char *path) {
     port_rom_size = size;
 }
 
-/* Looks for the ROM next to the program and in the working directory when none is given. */
-static const char *find_rom(void) {
+/* 1 when the file starts with the header of Glover (USA): the game code NGVE, in any of the three byte orders. */
+static int is_glover_usa(const char *path) {
+    unsigned char h[64];
+    unsigned char z[64];
+    FILE *f = fopen(path, "rb");
+    size_t n;
+    int i;
+
+    if (f == NULL) {
+        return 0;
+    }
+    n = fread(h, 1, sizeof(h), f);
+    fclose(f);
+    if (n != sizeof(h)) {
+        return 0;
+    }
+    for (i = 0; i < 64; i++) {
+        if (h[0] == 0x80 && h[1] == 0x37) {
+            z[i] = h[i];             /* .z64: big-endian */
+        } else if (h[0] == 0x37 && h[1] == 0x80) {
+            z[i] = h[i ^ 1];         /* .v64: each pair of bytes swapped */
+        } else if (h[0] == 0x40 && h[1] == 0x12) {
+            z[i] = h[i ^ 3];         /* .n64: each word reversed */
+        } else {
+            return 0;
+        }
+    }
+    return memcmp(z + 0x3B, "NGVE", 4) == 0;
+}
+
+/* 1 when the name ends in .z64, .v64 or .n64, in any letter case. */
+static int rom_extension(const char *name) {
+    size_t n = strlen(name);
+    char e[5];
+    int i;
+
+    if (n < 5) {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        e[i] = (char)tolower((unsigned char)name[n - 4 + i]);
+    }
+    e[4] = 0;
+    return !strcmp(e, ".z64") || !strcmp(e, ".v64") || !strcmp(e, ".n64");
+}
+
+/* The ROM in the folder (an empty folder name is the working folder): a file of one of the usual names first, then
+   the first file, in the order of the names, that ends in .z64, .v64 or .n64 and is Glover (USA). */
+static int find_rom_in(const char *folder, char *out, int size) {
     static const char *names[] = { "baserom.us.z64", "glover.z64", "Glover.z64", "Glover (USA).z64", "glover.n64",
                                    "glover.v64", NULL };
-    static char buf[1024];
-    char *base = SDL_GetBasePath();
+    char best[512] = "";
+    DIR *d;
+    struct dirent *ent;
     int i;
-    FILE *f;
 
     for (i = 0; names[i]; i++) {
-        if (base) {
-            snprintf(buf, sizeof(buf), "%s%s", base, names[i]);
-            if ((f = fopen(buf, "rb")) != NULL) {
-                fclose(f);
-                SDL_free(base);
-                return buf;
-            }
-        }
-        if ((f = fopen(names[i], "rb")) != NULL) {
+        FILE *f;
+
+        /* A file of one of these names is taken as it is: load_rom then says what is wrong with it. */
+        snprintf(out, size, "%s%s", folder, names[i]);
+        if ((f = fopen(out, "rb")) != NULL) {
             fclose(f);
-            if (base) {
-                SDL_free(base);
-            }
-            return names[i];
+            return 1;
         }
     }
-    if (base) {
+    d = opendir(folder[0] ? folder : ".");
+    if (d == NULL) {
+        return 0;
+    }
+    while ((ent = readdir(d)) != NULL) {
+        if (rom_extension(ent->d_name) && (best[0] == 0 || strcmp(ent->d_name, best) < 0)) {
+            snprintf(out, size, "%s%s", folder, ent->d_name);
+            if (is_glover_usa(out)) {
+                snprintf(best, sizeof(best), "%s", ent->d_name);
+            }
+        }
+    }
+    closedir(d);
+    if (best[0] == 0) {
+        return 0;
+    }
+    snprintf(out, size, "%s%s", folder, best);
+    return 1;
+}
+
+/* Looks for the ROM next to the program and in the working folder when none is given. */
+static const char *find_rom(void) {
+    static char buf[1024];
+    char *base = SDL_GetBasePath();
+    int found = base != NULL && find_rom_in(base, buf, sizeof(buf));
+
+    if (base != NULL) {
         SDL_free(base);
     }
-    return NULL;
+    if (!found) {
+        found = find_rom_in("", buf, sizeof(buf));
+    }
+    return found ? buf : NULL;
 }
 
 /* ---- The save file: the EEPROM's 512 bytes. */
@@ -200,11 +324,16 @@ static void load_save(void) {
     if (opt.savePath) {
         snprintf(savePath, sizeof(savePath), "%s", opt.savePath);
     } else {
-        char *pref = SDL_GetPrefPath("weemitt", "Glover");
-        snprintf(savePath, sizeof(savePath), port_get_ballworld() ? "%seeprom-ballworld.bin" : "%seeprom.bin", pref ? pref : "");
-        if (pref) {
-            SDL_free(pref);
+        char folder[900];
+
+        if (settings_folder(folder, sizeof(folder)) != 0 && !opt.headlessFrames) {
+            plog_printf("weemitt: there is no save folder (%s). The save, settings.ini and the log go to the working "
+                        "folder.", SDL_GetError());
         }
+        snprintf(savePath, sizeof(savePath), port_get_ballworld() ? "%seeprom-ballworld.bin" : "%seeprom.bin", folder);
+    }
+    if (!opt.headlessFrames) {
+        plog_printf("weemitt: the save file is %s", savePath);
     }
     f = fopen(savePath, "rb");
     if (f != NULL) {
@@ -215,9 +344,22 @@ static void load_save(void) {
     }
 }
 
+/* A notice that the save failed, once a run. */
+static void save_failed(const char *what) {
+    static int told;
+
+    plog_printf("weemitt: %s", what);
+    if (!told) {
+        told = 1;
+        menu_notice("The game could not be saved. The log says why.");
+    }
+}
+
 static void write_save(void) {
     FILE *f;
     char tmp[1100];
+    char msg[1200];
+    int ok;
 
     port_eeprom_dirty = 0;
     if (opt.headlessFrames || port_save_locked) {
@@ -226,14 +368,23 @@ static void write_save(void) {
     snprintf(tmp, sizeof(tmp), "%s.tmp", savePath);
     f = fopen(tmp, "wb");
     if (f == NULL) {
-        plog_printf("weemitt: cannot write the save file %s", tmp);
+        snprintf(msg, sizeof(msg), "cannot write the save file %s", tmp);
+        save_failed(msg);
         return;
     }
-    fwrite(port_eeprom, 1, sizeof(port_eeprom), f);
-    fclose(f);
+    /* The old save stays unless the new one is written in full. */
+    ok = fwrite(port_eeprom, 1, sizeof(port_eeprom), f) == sizeof(port_eeprom);
+    ok = fclose(f) == 0 && ok;
+    if (!ok) {
+        snprintf(msg, sizeof(msg), "cannot write the save file %s; the old save is kept", tmp);
+        remove(tmp);
+        save_failed(msg);
+        return;
+    }
     remove(savePath);
     if (rename(tmp, savePath) != 0) {
-        plog_printf("weemitt: cannot replace the save file %s", savePath);
+        snprintf(msg, sizeof(msg), "cannot replace the save file %s", savePath);
+        save_failed(msg);
     }
 }
 
@@ -251,12 +402,7 @@ void port_record_folder(char *out, int size) {
         n = slash != NULL ? (int)(slash - opt.savePath) + 1 : 0;
         snprintf(out, size, "%.*s", n, opt.savePath);
     } else {
-        char *pref = SDL_GetPrefPath("weemitt", "Glover");
-
-        snprintf(out, size, "%s", pref ? pref : "");
-        if (pref) {
-            SDL_free(pref);
-        }
+        settings_folder(out, size);
     }
 }
 
@@ -347,10 +493,19 @@ static void load_pad_mappings(void) {
 }
 
 static void read_input(const Settings *st) {
+    static Uint8 keys[SDL_NUM_SCANCODES];
     const Uint8 *k = SDL_GetKeyboardState(NULL);
     unsigned short b = 0;
     int x = 0;
     int y = 0;
+
+    if (SDL_GetModState() & KMOD_ALT) {
+        /* Alt+Enter switches full screen: the game does not see Return while Alt is held. */
+        memcpy(keys, k, sizeof(keys));
+        keys[SDL_SCANCODE_RETURN] = 0;
+        keys[SDL_SCANCODE_KP_ENTER] = 0;
+        k = keys;
+    }
 
     if (!menu_is_open()) {
         if (settings_input_down(st, k, IN_STICK_LEFT)) x -= STICK_MAX;
@@ -539,6 +694,18 @@ static void read_debug_input(const Settings *st) {
     port_debug_timer_scale(st->timerScale);
 }
 
+/* Why there is no sound, for the Audio window (port_sound_problem). */
+static char soundProblem[300];
+
+const char *port_sound_problem(void) {
+#ifndef PORT_AUDIO_MUS
+    (void)soundProblem;
+    return "This build plays no sound.";
+#else
+    return soundProblem;
+#endif
+}
+
 /* ---- Sound. With the real sound player (make AUDIO=mus), libmus calls these functions (src/audio/mus/mus-glue.c
    describes them). The game's s32 and s16 are int and short. */
 
@@ -594,11 +761,15 @@ int port_audio_open(int rate, void (*render)(short *out, int frames)) {
     SDL_AudioSpec want;
     SDL_AudioSpec have;
 
+    if (opt.noSound) {
+        snprintf(soundProblem, sizeof(soundProblem), "No sound: --no-sound turned it off for this run.");
+    }
     if (opt.headlessFrames || opt.noSound) {
         return 0;
     }
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         plog_printf("weemitt: no sound: %s", SDL_GetError());
+        snprintf(soundProblem, sizeof(soundProblem), "No sound: %s", SDL_GetError());
         return 0;
     }
     SDL_zero(want);
@@ -611,6 +782,7 @@ int port_audio_open(int rate, void (*render)(short *out, int frames)) {
     audioDevice = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (audioDevice == 0) {
         plog_printf("weemitt: no sound: %s", SDL_GetError());
+        snprintf(soundProblem, sizeof(soundProblem), "No sound device: %s", SDL_GetError());
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return 0;
     }
@@ -638,16 +810,42 @@ static void load_input_script(const char *path, ScriptedInput **script, int *scr
     char line[256];
     int cap = 0;
 
+    int lineNo = 0;
+    long lastFrame = -1;
+
     if (f == NULL) {
         die("cannot open the input script %s", path);
     }
     while (fgets(line, sizeof(line), f)) {
         ScriptedInput s;
         unsigned int buttons;
+        char rest[8];
+        char msg[1200];
+        const char *p = line;
 
-        if (line[0] == '#' || sscanf(line, "%ld:%x:%d:%d", &s.frame, &buttons, &s.x, &s.y) != 4) {
+        lineNo++;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        /* Blank lines and comments are skipped. Any other line must be FRAME:BUTTONS:X:Y, in frame order. */
+        if (*p == '#' || *p == '\n' || *p == '\r' || *p == 0) {
             continue;
         }
+        if (sscanf(p, "%ld:%x:%d:%d %7s", &s.frame, &buttons, &s.x, &s.y, rest) != 4) {
+            snprintf(msg, sizeof(msg), "%s:%d: cannot read the line (FRAME:BUTTONS:X:Y, buttons in hex)", path, lineNo);
+            die("%s", msg);
+        }
+        if (s.frame < 0 || buttons > 0xFFFF || s.x < -128 || s.x > 127 || s.y < -128 || s.y > 127) {
+            snprintf(msg, sizeof(msg), "%s:%d: a value is out of range (frame from 0, buttons up to ffff, stick -128 "
+                     "to 127)", path, lineNo);
+            die("%s", msg);
+        }
+        if (s.frame < lastFrame) {
+            snprintf(msg, sizeof(msg), "%s:%d: frame %ld comes after frame %ld; the lines must be in frame order", path,
+                     lineNo, s.frame, lastFrame);
+            die("%s", msg);
+        }
+        lastFrame = s.frame;
         s.buttons = (unsigned short)buttons;
         if (*scriptCount == cap) {
             cap = cap ? cap * 2 : 64;
@@ -791,7 +989,7 @@ static void start_recording(const char *path, const Settings *st) {
 
     snprintf(info.buildId, sizeof(info.buildId), "%s", rec_build_id());
     info.spaceDemo = opt.spaceDemo;
-    info.fixedRate = opt.fixedRate;
+    info.fixedRate = opt.fixedRate || st->physicsMode == PHYSICS_FIXED;
     info.level = opt.level;
     info.easyBall = st->easyBall;
     info.cameraFollow = st->cameraFollow;
@@ -799,7 +997,11 @@ static void start_recording(const char *path, const Settings *st) {
     info.eepromHash = rec_hash_bytes(port_eeprom, sizeof(port_eeprom));
     memcpy(info.eeprom, port_eeprom, sizeof(port_eeprom));
     if (rec_start(path, &info) != 0) {
+        if (opt.headlessFrames) {
+            die("cannot write the recording %s", path);
+        }
         plog_printf("weemitt: cannot write the recording %s", path);
+        menu_notice("The input recording could not start. The log says why.");
         return;
     }
     plog_printf("weemitt: recording the input to %s (%s)", path, info.buildId);
@@ -916,6 +1118,12 @@ static void replay_open(const Settings *st) {
         }
     } else {
         memcpy(port_eeprom, replayInfo.eeprom, sizeof(port_eeprom));
+    }
+    if (opt.levelGiven && opt.level != replayInfo.level) {
+        plog_printf("weemitt: replay: --level is taken from the recording (%ld)", (long)replayInfo.level);
+    }
+    if (opt.easyBall || opt.cameraFollow > 0.0f || (opt.spaceDemo && !replayInfo.spaceDemo)) {
+        plog_printf("weemitt: replay: --easy-ball, --camera-follow and --space-demo are taken from the recording");
     }
     opt.level = replayInfo.level;
     opt.spaceDemo = replayInfo.spaceDemo;
@@ -1165,7 +1373,7 @@ static int print_tick_trace(long frame) {
         port_game_trace(line, sizeof(line));
     }
     if (opt.hashRam && frame % opt.hashRam == 0) {
-        printf("frame %ld %s hash %08x\n", frame, line, port_hash_ram());
+        printf("frame %ld%s%s hash %08x\n", frame, line[0] ? " " : "", line, port_hash_ram());
     } else if (opt.trace) {
         printf("frame %ld %s\n", frame, line);
     }
@@ -1365,7 +1573,7 @@ static int run_headless(void) {
     open_audio_out();
     port_game_init(opt.level);
 #ifdef PORT_STUDIO
-    studio_started();
+    studio_started(opt.level);
     load_state_option();
 #endif
     if (opt.shotCount) {
@@ -1421,7 +1629,9 @@ static int run_headless(void) {
                 sceneTime += step;
             }
             n = run_update(opt.replayPath ? (float)step : port_game_demo() ? 1.0f : (float)step, tasks, 16);
-            fakeTimeUs += (unsigned long long)(step * port_game_retraces() * 1000000.0 / 60.0);
+            /* The clock follows the length as a float, the value a recording keeps: a replay then runs the same
+               clock (the game's profiler timers read it). At a length of exactly 1 nothing changes. */
+            fakeTimeUs += (unsigned long long)((double)(float)step * port_game_retraces() * 1000000.0 / 60.0);
         }
         if (opt.traceUpdates) {
             print_update_trace();
@@ -1512,6 +1722,18 @@ static int run_headless(void) {
         frame++;
     }
     finish_recording();
+#ifdef PORT_STUDIO
+    {
+        int k;
+
+        for (k = 0; k < opt.saveStateCount; k++) {
+            if (opt.saveStateFrame[k] >= frame) {
+                plog_printf("studio: --save-state %ld %s: the run ended after %ld frames, so nothing was written",
+                            opt.saveStateFrame[k], opt.saveStatePath[k], frame);
+            }
+        }
+    }
+#endif
     if (scene != NULL) {
         HwStats st;
 
@@ -1528,55 +1750,161 @@ static int run_headless(void) {
         return studio_selftest() != 0;
     }
 #endif
-    return 0;
+    /* A replay that departs from its recording is a failure. */
+    return replayBad ? 1 : 0;
 }
 
 /* ---- The window. */
 
 static void usage(void) {
-    printf("usage: weemitt [--rom FILE] [--level N] [--fullscreen] [--no-vsync] [--max-fps N] [--fixed] [--save FILE]\n"
-           "               [--no-sound] [--space-demo] [--log FILE] [--easy-ball] [--camera-follow N] [--skip-intro]\n"
-           "               [--infinite-lives] [--infinite-health] [--unlock-all] [--level-select] [--ballworld]\n"
-           "       weemitt --headless FRAMES [--level N] [--dt D] [--input SCRIPT] [--trace] [--hash | --hash-every N]\n"
-           "                [--dump FRAME FILE] [--shot FRAME]... [--shot-prefix PATH] [--shot-size W H] [--audio-out FILE]\n"
-           "--audio-out FILE (headless, with the real sound player) writes the sound's 16-bit stereo frames to FILE.\n"
-           "--log FILE writes the program's messages to FILE (the menu's Developer window can write weemitt.log).\n"
-           "--skip-intro skips the logos and the fly-through up to the title menu. The cheat options hold the game's own cheats\n"
-           "(INFINITE LIVES, INFINITE ENERGY, OPEN PORTALS with OPEN LEVELS, LEVEL SELECT) on. They work in the headless mode too,\n"
-           "where --goto-level FRAME LEVEL starts that level after original frame FRAME.\n"
-           "--debug-input SCRIPT drives the game's debug pad pad[4] (the format of --input), and --debug-action FRAME NAME\n"
-           "starts a debug action at that frame (prev-platform, next-platform, mark-levels, timing, prev-song, next-song,\n"
-           "inertia, quit, hurt, autoplay).\n"
-           "--space-demo starts in Space 1 and joins Space 1, 2 and 3 into one timed run.\n"
-           "--original-physics runs the logic as on the N64 and blends the drawn frames between two of its frames;\n"
-           "--smooth-physics runs it in short steps, once per drawn frame (settings.ini keeps the choice).\n"
-           "--render-scale PERCENT (50 to 400), --msaa SAMPLES (0, 2, 4, 8), --texture-filter n64|bilinear|nearest and\n"
-           "--widescreen off|stretch|horplus set the Graphics window's picture options for this run.\n"
-           "--shot-window (with --headless) saves the whole window in a screenshot, not only the renderer's frame.\n"
-           "--interp-shot FRAME (with --headless) saves screenshots at 0, 0.5 and 1 of the way between frame FRAME-1 and FRAME.\n"
-           "--interp-check (with --headless) prints, for every frame, how far the picture at t = 0 is from the previous frame's picture.\n"
-           "--fixed runs the game at the N64's rate (20 or 30 frames a second) instead of once per drawn frame.\n"
-           "--dt runs headless updates of D original frames each (for example 0.25); FRAMES counts original frames.\n"
-           "--dt-jitter J varies each headless update's length by up to J times D (for example 0.3), the same way every run.\n"
-           "--pace lets --dt-jitter make a drawn frame longer than D and splits it into updates, as the window does at a frame rate limit.\n"
-           "--host-scene FILE (headless, with --level) runs the glove and the ball in a host world: triangles, bodies and\n"
-           "                requests from FILE (docs/host-world.md).\n"
-           "--trace-updates prints the glove and ball state after every update (headless, or with --trace in a window build).\n"
-           "--record FILE writes an input recording (any build). The menu's Developer window can record to the save folder.\n"
-           "--replay FILE runs a recording headless, with its updates and controller values; it works with --trace,\n"
-           "                --trace-updates and --hash-every.\n");
+    printf("usage: weemitt [OPTIONS] [ROM]\n"
+           "\n"
+           "Playing (each option lasts for this run only; the menu's settings.ini is not changed):\n"
+           "  ROM, --rom FILE        the Glover (USA) ROM (.z64, .v64 or .n64). Without it, the program looks next to\n"
+           "                         itself and in the working folder (docs/playing.md).\n"
+           "  --level N              start level N at once, as the level select does (0 to 47; -1: the normal start)\n"
+           "  --fullscreen           start in full screen (F11 and Alt+Enter switch it)\n"
+           "  --save FILE            use this save file\n"
+           "  --no-sound             open no sound device\n"
+           "  --no-vsync, --max-fps N  drawing without VSync; at most N frames a second (20 to 240, 0: no limit)\n"
+           "  --original-physics, --smooth-physics, --fixed\n"
+           "                         the logic as on the N64 with blended frames; in short steps once per drawn\n"
+           "                         frame; or as on the N64 with no blending (Graphics, Physics)\n"
+           "  --easy-ball, --ballworld, --camera-follow N (1 to 3), --skip-intro\n"
+           "                         the Enhancements window's options\n"
+           "  --infinite-lives, --infinite-health, --unlock-all, --level-select\n"
+           "                         the game's own cheats, held on (the Cheats window)\n"
+           "  --space-demo           start in Space 1 and join Space 1, 2 and 3 into one timed run\n"
+           "  --log FILE             also write the program's messages to FILE\n"
+           "\n"
+           "The picture, for this run:\n"
+           "  --render-scale PERCENT (50 to 400), --msaa SAMPLES (0, 2, 4, 8), --texture-filter n64|bilinear|nearest,\n"
+           "  --widescreen off|stretch|horplus\n"
+           "\n"
+           "Recording:\n"
+           "  --record FILE          write an input recording of this run (any build)\n"
+           "  --replay FILE          run a recording without a window; it takes its level and options from the file and\n"
+           "                         exits with 1 when the run departs from it. Works with --trace, --trace-updates and\n"
+           "                         --hash-every.\n"
+           "\n"
+           "Tests without a window (docs/testing.md):\n"
+           "  --headless FRAMES      run FRAMES original frames as fast as possible\n"
+           "  --input SCRIPT         controller input: lines FRAME:BUTTONS:X:Y (buttons in hex)\n"
+           "  --trace, --trace-updates, --hash, --hash-every N\n"
+           "                         print the state after each frame or update, and a hash of the game's memory\n"
+           "  --dt D, --dt-jitter J, --pace\n"
+           "                         updates of D original frames (0 < D <= 1); vary them by up to J times D; split long\n"
+           "                         frames as the window does\n"
+           "  --goto-level FRAME LEVEL  start LEVEL (0 to 42) after original frame FRAME\n"
+           "  --dump FRAME FILE      write the game's memory after FRAME\n"
+           "  --shot FRAME, --shot-prefix PATH, --shot-size W H, --shot-window\n"
+           "                         save screenshots (needs a build with the renderer and a display)\n"
+           "  --interp-shot FRAME    save screenshots at 0, 0.25, 0.5, 0.75 and 1 of the way from FRAME-1 to FRAME\n"
+           "  --interp-check         print how far the picture at t = 0 is from the previous frame's picture\n"
+           "  --audio-out FILE       with the real sound player: write the sound's 16-bit stereo frames to FILE\n"
+           "  --host-scene FILE      with --level: run the glove and the ball in a host world (docs/host-world.md)\n"
+           "  --debug-input SCRIPT   drive the game's debug pad pad[4] (the format of --input)\n"
+           "  --debug-action FRAME NAME  start a debug action at FRAME: prev-platform, next-platform, mark-levels,\n"
+           "                         timing, prev-song, next-song, inertia, quit, hurt or autoplay\n");
 #ifdef PORT_STUDIO
-    printf("The studio:\n"
-           "--load-state FILE starts from a state file that the studio saved: its frame is the first of the timeline.\n"
-           "                The window starts paused. With --headless, the updates and the --input script start there.\n"
-           "--save-state FRAME FILE (with --headless, up to 8 times) writes the state after original frame FRAME (the\n"
-           "                frame of --trace's line) to FILE and goes on. A state file holds the game's memory: do not share it.\n"
-           "weemitt-studio search|bench|play|saveload ... runs the brute forcer's commands (bruteforce/README.md).\n");
+    printf("\n"
+           "The studio:\n"
+           "  --load-state FILE      start from a state file that the studio saved: its frame is the first of the\n"
+           "                         timeline. The window starts paused. With --headless, the updates and the --input\n"
+           "                         script start there.\n"
+           "  --save-state FRAME FILE  with --headless, up to 8 times: write the state after original frame FRAME (the\n"
+           "                         frame of --trace's line) to FILE and go on. A state file holds the game's memory:\n"
+           "                         do not share it.\n"
+           "  weemitt-studio search|bench|play|saveload ... runs the brute forcer's commands (bruteforce/README.md).\n");
 #endif
     exit(0);
 }
 
+/* A mistake on the command line: one line, a hint to --help, and the exit code 2. The window builds also show it
+   in a box (on Windows the program may have no console). */
+static void bad_usage(const char *fmt, const char *a, const char *b) {
+    char msg[700];
+    char line[800];
+
+    snprintf(msg, sizeof(msg), fmt, a, b);
+    snprintf(line, sizeof(line), "%s. Run weemitt --help for the options.", msg);
+    die_code(2, line);
+}
+
+/* The value of a number option: the whole text must be a whole number from lo to hi. */
+static long number_arg(const char *option, const char *text, long lo, long hi) {
+    char *end;
+    long v = strtol(text, &end, 10);
+
+    if (end == text || *end != 0) {
+        bad_usage("%s needs a whole number, not \"%s\"", option, text);
+    }
+    if (v < lo || v > hi) {
+        char msg[200];
+
+        snprintf(msg, sizeof(msg), "%s is %ld to %ld, not \"%%s\"%%s", option, lo, hi);
+        bad_usage(msg, text, "");
+    }
+    return v;
+}
+
+/* The same for a number with a fraction, in [lo, hi] (or (lo, hi] when openLo). */
+static double real_arg(const char *option, const char *text, double lo, double hi, int openLo) {
+    char *end;
+    double v = strtod(text, &end);
+
+    if (end == text || *end != 0) {
+        bad_usage("%s needs a number, not \"%s\"", option, text);
+    }
+    if (v > hi || v < lo || (openLo && v == lo)) {
+        char msg[200];
+
+        snprintf(msg, sizeof(msg), "%s is %s %g to %g, not \"%%s\"%%s", option, openLo ? "more than" : "from", lo, hi);
+        bad_usage(msg, text, "");
+    }
+    return v;
+}
+
+/* One word from a list of choices; returns its index. */
+static int choice_arg(const char *option, const char *text, const char *const *choices, int count) {
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (!strcmp(text, choices[i])) {
+            return i;
+        }
+    }
+    bad_usage("%s does not take \"%s\"", option, text);
+    return 0;
+}
+
+/* The options that take values, and how many: an option given last without its value is a mistake. */
+static int option_values(const char *a) {
+    static const char *const one[] = {
+        "--rom", "--headless", "--input", "--level", "--dt", "--dt-jitter", "--record", "--replay", "--host-scene",
+        "--max-fps", "--shot", "--interp-shot", "--render-scale", "--msaa", "--texture-filter", "--widescreen",
+        "--shot-prefix", "--load-state", "--hash-every", "--save", "--audio-out", "--debug-input", "--camera-follow",
+        "--log", NULL,
+    };
+    static const char *const two[] = { "--shot-size", "--save-state", "--dump", "--debug-action", "--goto-level", NULL };
+    int i;
+
+    for (i = 0; one[i]; i++) {
+        if (!strcmp(a, one[i])) {
+            return 1;
+        }
+    }
+    for (i = 0; two[i]; i++) {
+        if (!strcmp(a, two[i])) {
+            return 2;
+        }
+    }
+    return 0;
+}
+
 static void parse_args(int argc, char **argv) {
+    static const char *const filters[] = { "n64", "bilinear", "nearest" };
+    static const char *const wides[] = { "off", "stretch", "horplus" };
     int i;
 
     opt.vsync = -1;
@@ -1592,44 +1920,57 @@ static void parse_args(int argc, char **argv) {
     /* The demo build (make space-demo) is the Space demo without options. */
     opt.spaceDemo = 1;
 #endif
+    /* A mistake shows no box in a run without a window. */
+    for (i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--headless") || !strcmp(argv[i], "--replay") || !strcmp(argv[i], "--help")) {
+            noBox = 1;
+        }
+    }
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
-        const char *next = i + 1 < argc ? argv[i + 1] : NULL;
+        int values = option_values(a);
 
-        if (!strcmp(a, "--rom") && next) {
+        if (values > 0 && i + values >= argc) {
+            bad_usage(values == 1 ? "%s needs a value%s" : "%s needs two values%s", a, "");
+        }
+        if (!strcmp(a, "--rom")) {
             opt.rom = argv[++i];
-        } else if (!strcmp(a, "--headless") && next) {
-            opt.headlessFrames = atol(argv[++i]);
-        } else if (!strcmp(a, "--input") && next) {
+        } else if (!strcmp(a, "--headless")) {
+            opt.headlessFrames = number_arg(a, argv[++i], 1, 0x7ffffffeL);
+        } else if (!strcmp(a, "--input")) {
             opt.inputScript = argv[++i];
-        } else if (!strcmp(a, "--level") && next) {
-            opt.level = atol(argv[++i]);
+        } else if (!strcmp(a, "--level")) {
+            opt.level = number_arg(a, argv[++i], -1, 47);
+            opt.levelGiven = 1;
         } else if (!strcmp(a, "--fixed")) {
             opt.fixedRate = 1;
-        } else if (!strcmp(a, "--dt") && next) {
-            opt.dt = atof(argv[++i]);
-        } else if (!strcmp(a, "--dt-jitter") && next) {
-            opt.dtJitter = atof(argv[++i]);
+        } else if (!strcmp(a, "--dt")) {
+            opt.dt = real_arg(a, argv[++i], 0.0, 1.0, 1);
+        } else if (!strcmp(a, "--dt-jitter")) {
+            opt.dtJitter = real_arg(a, argv[++i], 0.0, 1.0, 0);
         } else if (!strcmp(a, "--pace")) {
             opt.pace = 1;
-        } else if (!strcmp(a, "--record") && next) {
+        } else if (!strcmp(a, "--record")) {
             opt.recordPath = argv[++i];
-        } else if (!strcmp(a, "--replay") && next) {
+        } else if (!strcmp(a, "--replay")) {
             opt.replayPath = argv[++i];
-        } else if (!strcmp(a, "--host-scene") && next) {
+        } else if (!strcmp(a, "--host-scene")) {
             opt.hostScene = argv[++i];
         } else if (!strcmp(a, "--trace-updates")) {
             opt.traceUpdates = 1;
-        } else if (!strcmp(a, "--max-fps") && next) {
-            opt.maxFps = atoi(argv[++i]);
-        } else if (!strcmp(a, "--shot") && next) {
-            if (opt.shotCount < 64) {
-                opt.shotFrames[opt.shotCount++] = atol(argv[++i]);
-            } else {
-                i++;
+        } else if (!strcmp(a, "--max-fps")) {
+            opt.maxFps = (int)number_arg(a, argv[++i], 0, FPS_LIMIT_MAX);
+            if (opt.maxFps > 0 && opt.maxFps < FPS_LIMIT_MIN) {
+                bad_usage("%s is 0 (no limit) or 20 to 240, not \"%s\"", a, argv[i]);
             }
-        } else if (!strcmp(a, "--interp-shot") && next) {
-            opt.interpShot = atol(argv[++i]);
+        } else if (!strcmp(a, "--shot")) {
+            long f = number_arg(a, argv[++i], 0, 0x7ffffffeL);
+
+            if (opt.shotCount < 64) {
+                opt.shotFrames[opt.shotCount++] = f;
+            }
+        } else if (!strcmp(a, "--interp-shot")) {
+            opt.interpShot = number_arg(a, argv[++i], 0, 0x7ffffffeL);
             if (opt.shotCount == 0) {
                 opt.shotFrames[opt.shotCount++] = -1;
             }
@@ -1642,47 +1983,46 @@ static void parse_args(int argc, char **argv) {
             opt.physics = PHYSICS_ORIGINAL;
         } else if (!strcmp(a, "--smooth-physics")) {
             opt.physics = PHYSICS_SMOOTH;
-        } else if (!strcmp(a, "--render-scale") && next) {
-            opt.renderScale = atoi(argv[++i]);
-        } else if (!strcmp(a, "--msaa") && next) {
-            opt.msaa = atoi(argv[++i]);
-        } else if (!strcmp(a, "--texture-filter") && next) {
-            const char *v = argv[++i];
-
-            opt.texFilter = !strcmp(v, "bilinear") ? TEXFILTER_BILINEAR : !strcmp(v, "nearest") ? TEXFILTER_NEAREST : TEXFILTER_N64;
-        } else if (!strcmp(a, "--widescreen") && next) {
-            const char *v = argv[++i];
-
-            opt.widescreen = !strcmp(v, "stretch") ? WIDESCREEN_STRETCH : !strcmp(v, "horplus") ? WIDESCREEN_HORPLUS : WIDESCREEN_OFF;
+        } else if (!strcmp(a, "--render-scale")) {
+            opt.renderScale = (int)number_arg(a, argv[++i], RENDER_SCALE_MIN, RENDER_SCALE_MAX);
+        } else if (!strcmp(a, "--msaa")) {
+            opt.msaa = (int)number_arg(a, argv[++i], 0, 8);
+            if (opt.msaa != 0 && opt.msaa != 2 && opt.msaa != 4 && opt.msaa != 8) {
+                bad_usage("%s is 0, 2, 4 or 8, not \"%s\"", a, argv[i]);
+            }
+        } else if (!strcmp(a, "--texture-filter")) {
+            opt.texFilter = choice_arg(a, argv[++i], filters, 3);
+        } else if (!strcmp(a, "--widescreen")) {
+            opt.widescreen = choice_arg(a, argv[++i], wides, 3);
         } else if (!strcmp(a, "--shot-window")) {
             opt.shotWindow = 1;
-        } else if (!strcmp(a, "--shot-prefix") && next) {
+        } else if (!strcmp(a, "--shot-prefix")) {
             opt.shotPrefix = argv[++i];
-        } else if (!strcmp(a, "--shot-size") && i + 2 < argc) {
-            opt.shotWidth = atoi(argv[++i]);
-            opt.shotHeight = atoi(argv[++i]);
+        } else if (!strcmp(a, "--shot-size")) {
+            opt.shotWidth = (int)number_arg(a, argv[++i], 1, 8192);
+            opt.shotHeight = (int)number_arg(a, argv[++i], 1, 8192);
 #ifdef PORT_STUDIO
-        } else if (!strcmp(a, "--load-state") && next) {
+        } else if (!strcmp(a, "--load-state")) {
             opt.loadState = argv[++i];
-        } else if (!strcmp(a, "--save-state") && i + 2 < argc) {
+        } else if (!strcmp(a, "--save-state")) {
             if (opt.saveStateCount == 8) {
-                die("%s", "at most 8 --save-state options");
+                bad_usage("%s can be given at most 8 times%s", a, "");
             }
-            opt.saveStateFrame[opt.saveStateCount] = atol(argv[++i]);
+            opt.saveStateFrame[opt.saveStateCount] = number_arg(a, argv[++i], 0, 0x7ffffffeL);
             opt.saveStatePath[opt.saveStateCount++] = argv[++i];
 #endif
-        } else if (!strcmp(a, "--dump") && i + 2 < argc) {
-            opt.dumpFrame = atol(argv[++i]);
+        } else if (!strcmp(a, "--dump")) {
+            opt.dumpFrame = number_arg(a, argv[++i], 0, 0x7ffffffeL);
             opt.dumpPath = argv[++i];
         } else if (!strcmp(a, "--trace")) {
             opt.trace = 1;
         } else if (!strcmp(a, "--hash")) {
             opt.hashRam = 1;
-        } else if (!strcmp(a, "--hash-every") && next) {
-            opt.hashRam = atoi(argv[++i]);
-        } else if (!strcmp(a, "--save") && next) {
+        } else if (!strcmp(a, "--hash-every")) {
+            opt.hashRam = (int)number_arg(a, argv[++i], 1, 0x7ffffffeL);
+        } else if (!strcmp(a, "--save")) {
             opt.savePath = argv[++i];
-        } else if (!strcmp(a, "--audio-out") && next) {
+        } else if (!strcmp(a, "--audio-out")) {
             opt.audioOut = argv[++i];
         } else if (!strcmp(a, "--fullscreen")) {
             opt.fullscreen = 1;
@@ -1704,18 +2044,21 @@ static void parse_args(int argc, char **argv) {
             opt.unlockAll = 1;
         } else if (!strcmp(a, "--level-select")) {
             opt.levelSelect = 1;
-        } else if (!strcmp(a, "--debug-input") && i + 1 < argc) {
+        } else if (!strcmp(a, "--debug-input")) {
             opt.debugInput = argv[++i];
-        } else if (!strcmp(a, "--debug-action") && i + 2 < argc) {
-            long f = atol(argv[++i]);
+        } else if (!strcmp(a, "--debug-action")) {
+            long f = number_arg(a, argv[++i], 0, 0x7ffffffeL);
 
+            if (debug_action_by_name(argv[i + 1]) < 0) {
+                bad_usage("%s does not know the action \"%s\"", a, argv[i + 1]);
+            }
             add_debug_action(f, argv[++i]);
-        } else if (!strcmp(a, "--goto-level") && i + 2 < argc) {
-            opt.gotoFrame = atol(argv[++i]);
-            opt.gotoLevel = atol(argv[++i]);
-        } else if (!strcmp(a, "--camera-follow") && next) {
-            opt.cameraFollow = (float)atof(argv[++i]);
-        } else if (!strcmp(a, "--log") && next) {
+        } else if (!strcmp(a, "--goto-level")) {
+            opt.gotoFrame = number_arg(a, argv[++i], 0, 0x7ffffffeL);
+            opt.gotoLevel = number_arg(a, argv[++i], 0, 42);
+        } else if (!strcmp(a, "--camera-follow")) {
+            opt.cameraFollow = (float)real_arg(a, argv[++i], 1.0, 3.0, 0);
+        } else if (!strcmp(a, "--log")) {
             opt.logPath = argv[++i];
         } else if (!strcmp(a, "--space-demo")) {
             opt.spaceDemo = 1;
@@ -1723,15 +2066,25 @@ static void parse_args(int argc, char **argv) {
             usage();
         } else if (a[0] != '-' && opt.rom == NULL) {
             opt.rom = a;
+        } else if (a[0] != '-') {
+            bad_usage("one ROM only: \"%s\" and \"%s\"", opt.rom, a);
         } else {
-            plog_printf("weemitt: unknown option %s", a);
-            usage();
+            bad_usage("unknown option %s%s", a, "");
         }
     }
     if (opt.replayPath && !opt.headlessFrames) {
         /* A replay runs until the recording ends. */
         opt.headlessFrames = 0x7fffffff;
     }
+    if (opt.hostScene != NULL && opt.level < 0) {
+        bad_usage("%s needs --level%s", "--host-scene", "");
+    }
+#ifdef PORT_RENDERER_NULL
+    if (opt.shotCount) {
+        bad_usage("this build has no renderer for --shot, --interp-shot and --interp-check%s%s",
+                  ". Use the window build (build/linux/weemitt) with a display", "");
+    }
+#endif
 }
 
 /* Test option: WEEMITT_TAPS=START,SPACING,COUNT. From original frame START, every SPACING frames, the window loop
@@ -1866,6 +2219,119 @@ static void protect_ram_guard(void) {
 }
 #endif
 
+/* ---- The window's place, full screen, the icon and the cursor. */
+
+static SDL_Window *mainWindow;
+static Settings *mainSettings;
+static int testWindowSize; /* WEEMITT_WINDOW_SIZE: the window's size is a test's, not the player's */
+
+int port_fullscreen(void) {
+    return mainWindow != NULL && (SDL_GetWindowFlags(mainWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+}
+
+void port_set_fullscreen(int on) {
+    if (mainWindow == NULL) {
+        return;
+    }
+    SDL_SetWindowFullscreen(mainWindow, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    mainSettings->fullscreen = on != 0;
+    menu_settings_changed();
+}
+
+/* Keeps the window's place and size in the settings while it is not full screen. */
+static void note_window_place(void) {
+    int x, y, w, h;
+    Uint32 flags = SDL_GetWindowFlags(mainWindow);
+
+    if (testWindowSize
+        || (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED))) {
+        return;
+    }
+    SDL_GetWindowPosition(mainWindow, &x, &y);
+    SDL_GetWindowSize(mainWindow, &w, &h);
+    if (x != mainSettings->windowX || y != mainSettings->windowY || w != mainSettings->windowW
+        || h != mainSettings->windowH) {
+        mainSettings->windowX = x;
+        mainSettings->windowY = y;
+        mainSettings->windowW = w;
+        mainSettings->windowH = h;
+        menu_settings_changed();
+    }
+}
+
+/* 1 when the rectangle's middle lies on one of the displays: a window placed there can be reached. */
+static int place_on_screen(int x, int y, int w, int h) {
+    int i;
+
+    for (i = 0; i < SDL_GetNumVideoDisplays(); i++) {
+        SDL_Rect r;
+
+        if (SDL_GetDisplayUsableBounds(i, &r) == 0 && x + w / 2 >= r.x && x + w / 2 < r.x + r.w && y + h / 2 >= r.y
+            && y + h / 2 < r.y + r.h) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The window's icon, drawn here from a small map: a white glove on a red ball. It holds nothing from the ROM. */
+static void set_window_icon(SDL_Window *w) {
+    static const char *const map[16] = {
+        "................",
+        "......W.W.......",
+        "....W.WWW.W.....",
+        "....WWWWWWW.....",
+        "....WWWWWWW.WW..",
+        "....WWWWWWWWW...",
+        ".....WWWWWWW....",
+        "......WWWWW.....",
+        ".....rrrrrr.....",
+        "...rrRRRRRRrr...",
+        "..rRRRhhRRRRRr..",
+        "..rRRhhRRRRRRr..",
+        "..rRRRRRRRRRRr..",
+        "...rRRRRRRRRr...",
+        "....rrRRRRrr....",
+        "......rrrr......",
+    };
+    static Uint32 px[32 * 32];
+    SDL_Surface *icon;
+    int x, y;
+
+    for (y = 0; y < 32; y++) {
+        for (x = 0; x < 32; x++) {
+            char c = map[y / 2][x / 2];
+
+            px[y * 32 + x] = c == 'W' ? 0xFFF4F4F4u : c == 'R' ? 0xFFD02828u : c == 'r' ? 0xFF8C1414u
+                           : c == 'h' ? 0xFFFF9A8Au : 0x00000000u;
+        }
+    }
+    icon = SDL_CreateRGBSurfaceFrom(px, 32, 32, 32, 32 * 4, 0x00FF0000u, 0x0000FF00u, 0x000000FFu, 0xFF000000u);
+    if (icon != NULL) {
+        SDL_SetWindowIcon(w, icon);
+        SDL_FreeSurface(icon);
+    }
+}
+
+#ifdef _WIN32
+/* The Windows program has no console of its own. Started from one, its output goes there, unless it is already
+   redirected to a file or a pipe. */
+static void attach_console(void) {
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+
+    if ((out == NULL || out == INVALID_HANDLE_VALUE || err == NULL || err == INVALID_HANDLE_VALUE)
+        && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        if (out == NULL || out == INVALID_HANDLE_VALUE) {
+            freopen("CONOUT$", "w", stdout);
+        }
+        if (err == NULL || err == INVALID_HANDLE_VALUE) {
+            freopen("CONOUT$", "w", stderr);
+        }
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     SDL_Window *window;
     SDL_GLContext gl;
@@ -1891,7 +2357,18 @@ int main(int argc, char **argv) {
     int vsyncSlack = 0; /* drawn frames in a row that VSync did not slow down */
     int startW = 960;
     int startH = 720;
+    int startX = SDL_WINDOWPOS_CENTERED;
+    int startY = SDL_WINDOWPOS_CENTERED;
     int vsyncFails = 0; /* VSync is on but does not pace: the software limiter takes over */
+    int fixedRate;      /* whole original frames with no blending: --fixed, or Physics, Original (no blending) */
+    int held = 0;       /* the game waits: the menu is open or the window lost focus, as the settings ask */
+    Uint32 mouseMoved = 0; /* the time of the mouse's last move: the cursor hides over the game after a while */
+    int cursorShown = 1;
+    Settings fileSettings;
+
+#ifdef _WIN32
+    attach_console();
+#endif
 
 #ifdef PORT_STUDIO
     {
@@ -1907,6 +2384,9 @@ int main(int argc, char **argv) {
     protect_ram_guard();
 #endif
     parse_args(argc, argv);
+    if (!opt.headlessFrames) {
+        port_fatal_hook = fatal_box;
+    }
     if (opt.trace || opt.traceUpdates || opt.hashRam) {
         setvbuf(stdout, NULL, _IOLBF, 0);
     }
@@ -1919,6 +2399,7 @@ int main(int argc, char **argv) {
         /* The settings come first so that the log file captures the start-up messages. */
         settings_path(settingsFile, sizeof(settingsFile));
         settings_load(&settings, settingsFile);
+        fileSettings = settings;
         if (settings.logFile && opt.logPath == NULL) {
             char logFile[512];
 
@@ -1956,7 +2437,8 @@ int main(int argc, char **argv) {
     }
     timeBase = SDL_GetPerformanceCounter();
     if (opt.rom == NULL) {
-        die("%s", "No ROM found. Put the Glover (USA) ROM next to the program as glover.z64, or pass --rom FILE.");
+        die("%s", "No ROM found. Put the Glover (USA) ROM (a .z64, .v64 or .n64 file) next to the program or in the "
+                  "folder you start it from, or pass --rom FILE.");
     }
     if (!opt.headlessFrames) {
         plog_printf("weemitt starting, ROM %s", opt.rom);
@@ -1970,6 +2452,7 @@ int main(int argc, char **argv) {
     port_record_folder(port_debug_folder, sizeof(port_debug_folder));
 #ifdef PORT_STUDIO
     studio_init(port_rom, port_rom_size);
+    /* The search runs in its own folder: it needs the ROM's full path. */
     studio_set_rom_path(opt.rom);
 #endif
     if (opt.inputScript) {
@@ -2024,6 +2507,17 @@ int main(int argc, char **argv) {
     if (opt.physics >= 0) {
         settings.physicsMode = opt.physics;
     }
+    if (opt.fullscreen) {
+        settings.fullscreen = 1;
+    }
+    /* The command line's options last for this run: settings.ini keeps its own values for them. */
+    settings_keep_file(&fileSettings, &settings);
+#if defined(__linux__)
+    if (getenv("DISPLAY") == NULL && getenv("WAYLAND_DISPLAY") == NULL) {
+        die("%s", "There is no display: DISPLAY and WAYLAND_DISPLAY are not set. Start the program on the desktop, "
+                  "or use xvfb-run for a run without a screen.");
+    }
+#endif
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -2031,17 +2525,33 @@ int main(int argc, char **argv) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     /* Test option: WEEMITT_WINDOW_SIZE=WxH sets the size of the window at the start. */
-    if (getenv("WEEMITT_WINDOW_SIZE") != NULL && sscanf(getenv("WEEMITT_WINDOW_SIZE"), "%dx%d", &startW, &startH) != 2) {
-        startW = 960;
-        startH = 720;
+    if (settings.windowW >= 320 && settings.windowH >= 240) {
+        /* The window's size and place from the last run, when they are still on a display. */
+        startW = settings.windowW;
+        startH = settings.windowH;
+        if (place_on_screen(settings.windowX, settings.windowY, startW, startH)) {
+            startX = settings.windowX;
+            startY = settings.windowY;
+        }
+    }
+    if (getenv("WEEMITT_WINDOW_SIZE") != NULL) {
+        if (sscanf(getenv("WEEMITT_WINDOW_SIZE"), "%dx%d", &startW, &startH) != 2) {
+            startW = 960;
+            startH = 720;
+        }
+        startX = startY = SDL_WINDOWPOS_CENTERED;
+        testWindowSize = 1;
     }
     window = SDL_CreateWindow(rec_active() ? (opt.spaceDemo ? "Glover: Space demo [REC]" : "Glover [REC]")
-                                           : (opt.spaceDemo ? "Glover: Space demo" : "Glover"), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, startW, startH,
+                                           : (opt.spaceDemo ? "Glover: Space demo" : "Glover"), startX, startY, startW, startH,
                               SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
-                                  | (opt.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
+                                  | (settings.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (window == NULL) {
         die("cannot open a window: %s", SDL_GetError());
     }
+    mainWindow = window;
+    mainSettings = &settings;
+    set_window_icon(window);
     gl = SDL_GL_CreateContext(window);
     if (gl == NULL) {
         die("cannot create an OpenGL 3.3 context: %s", SDL_GetError());
@@ -2062,7 +2572,7 @@ int main(int argc, char **argv) {
     port_set_space_demo(opt.spaceDemo);
     port_game_init(opt.level);
 #ifdef PORT_STUDIO
-    studio_started();
+    studio_started(opt.level);
     load_state_option();
 #endif
     port_game_framebuffers(&cfbA, &cfbB);
@@ -2085,8 +2595,19 @@ int main(int argc, char **argv) {
             if (e.type == SDL_JOYDEVICEADDED || e.type == SDL_JOYDEVICEREMOVED || e.type == SDL_CONTROLLERDEVICEADDED) {
                 pad2Dirty = 1;
             }
-            unsigned short pressed = input_event_buttons(&settings, &e, !menu_is_open(), pad != NULL,
-                                                         pad == NULL && joy != NULL);
+            /* Alt+Enter switches full screen: its Return does not reach the game. */
+            int altEnter = e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER)
+                           && (e.key.keysym.mod & KMOD_ALT);
+            unsigned short pressed = altEnter ? 0 : input_event_buttons(&settings, &e, !menu_is_open(), pad != NULL,
+                                                                        pad == NULL && joy != NULL);
+
+            if (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEBUTTONDOWN) {
+                mouseMoved = SDL_GetTicks();
+            }
+            if (e.type == SDL_WINDOWEVENT
+                && (e.window.event == SDL_WINDOWEVENT_MOVED || e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+                note_window_place();
+            }
 
             if (menu_handle_event(&e)) {
                 continue;
@@ -2106,12 +2627,10 @@ int main(int argc, char **argv) {
                 } else if (settings.stepRequests < 4) {
                     settings.stepRequests++;
                 }
-            } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) {
-                Uint32 full = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP;
-                SDL_SetWindowFullscreen(window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
-            } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT)) {
-                Uint32 full = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN_DESKTOP;
-                SDL_SetWindowFullscreen(window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+            } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11 && !e.key.repeat) {
+                port_set_fullscreen(!port_fullscreen());
+            } else if (altEnter && !e.key.repeat) {
+                port_set_fullscreen(!port_fullscreen());
             } else if (e.type == SDL_JOYDEVICEADDED) {
                 log_device(e.jdevice.which, "joystick found:");
                 open_pad();
@@ -2146,9 +2665,31 @@ int main(int argc, char **argv) {
         }
         scripted_debug(windowTicks);
 #ifdef PORT_STUDIO
-        studio_poll(&port_buttons, &port_stick_x, &port_stick_y);
-        tapPending &= ~studio_input_mask();
+        {
+            /* The studio's controls see the short taps too (a press shorter than a drawn frame). The game gets them
+               through tapPending, as before. */
+            unsigned short seen = port_buttons | tapPending;
+
+            studio_poll(&seen, &port_stick_x, &port_stick_y);
+            port_buttons &= seen;
+            tapPending &= ~studio_input_mask();
+        }
 #endif
+        /* Settings, Graphics: the game waits while the menu is open, or while the window is not the active one. */
+        held = (settings.pauseMenu && menu_is_open())
+               || (settings.pauseUnfocused && !(SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS));
+        /* The cursor hides over the game picture after 2 seconds without a move, unless the menu or the studio's
+           bar is open. */
+        {
+            int show = menu_is_open() || SDL_GetTicks() - mouseMoved < 2000;
+#ifdef PORT_STUDIO
+            show |= studio_paused();
+#endif
+            if (show != cursorShown) {
+                cursorShown = show;
+                SDL_ShowCursor(show ? SDL_ENABLE : SDL_DISABLE);
+            }
+        }
 
         /* The renderer needs the window's size and the picture options before it records a frame. */
         SDL_GL_GetDrawableSize(window, &w, &h);
@@ -2160,11 +2701,12 @@ int main(int argc, char **argv) {
         if (acc > 0.25) {
             acc = 0.25;
         }
-        original = settings.physicsMode == PHYSICS_ORIGINAL && !opt.fixedRate;
+        fixedRate = opt.fixedRate || settings.physicsMode == PHYSICS_FIXED;
+        original = settings.physicsMode == PHYSICS_ORIGINAL && !fixedRate;
 #ifdef PORT_STUDIO
         /* The timeline holds whole game frames: the studio always runs the Original physics, whatever the setting
-           (which the normal program shares). */
-        original = !opt.fixedRate;
+           (which the normal program shares), with or without the blending. */
+        original = !fixedRate;
 #endif
         if (original && !wasOriginal && taskCount > 0) {
             /* Switched to the Original mode: the frame on show is the first one the renderer knows. */
@@ -2182,15 +2724,16 @@ int main(int argc, char **argv) {
                 settings.stepRequests++;
             }
         }
-        if ((settings.pauseLogic || studio_paused())
-            && (updatesRun == 0 || port_game_ticked() || original || opt.fixedRate || port_game_demo())) {
+        if ((settings.pauseLogic || held || studio_paused())
+            && (updatesRun == 0 || port_game_ticked() || original || fixedRate || port_game_demo())) {
 #else
-        if (settings.pauseLogic && (updatesRun == 0 || port_game_ticked() || original || opt.fixedRate || port_game_demo())) {
+        if ((settings.pauseLogic || held)
+            && (updatesRun == 0 || port_game_ticked() || original || fixedRate || port_game_demo())) {
 #endif
             /* Developer, Pause game logic. In the Smooth mode the pause starts at the end of the original frame
                in progress. A step is then a whole frame. Drawing goes on at the latest game frame. */
             acc = original ? port_game_retraces() / 60.0 * 0.999 : 0.0;
-            if (settings.stepRequests > 0) {
+            if (settings.stepRequests > 0 && !held) {
                 long n;
 
                 settings.stepRequests--;
@@ -2204,7 +2747,7 @@ int main(int argc, char **argv) {
                 }
             }
             gfx_interp_set(-1.0f);
-        } else if (opt.fixedRate || port_game_demo() || original) {
+        } else if (fixedRate || port_game_demo() || original) {
             /* The N64's timing: one original frame every port_game_retraces() sixtieths of a second. A recorded
                demo always runs this way, since its input was recorded per original frame. In the Original physics
                mode the renderer keeps the matrices of each new frame, and the drawn frame blends the previous
@@ -2258,7 +2801,7 @@ int main(int argc, char **argv) {
                 if (acc > -1e-7 && acc < 1e-7) {
                     acc = 0.0;
                 }
-                if (settings.pauseLogic && port_game_ticked()) {
+                if ((settings.pauseLogic || held) && port_game_ticked()) {
                     /* Pause asked for: the original frame has ended, so the logic stops here. */
                     acc = 0.0;
                     break;
@@ -2297,10 +2840,13 @@ int main(int argc, char **argv) {
             int interval = 1;
             int software = 1;
 
-            settings.fpsCap = settings.maxFps == 0 ? cap : 0;
             if (drawn % 120 == 1 || refresh == 0) {
                 refresh = display_refresh(window);
             }
+            /* The cap that Unlimited is held to, for the menu. With VSync pacing below it, the refresh rate is the
+               limit, and no cap shows. */
+            settings.fpsCap = settings.maxFps == 0 && !(settings.vsync && refresh > 0 && refresh < cap && !vsyncFails)
+                              ? cap : 0;
             if (settings.vsync && refresh > 0 && !vsyncFails) {
                 /* VSync alone sets the pace when the limit is the refresh rate or higher, or when it is a whole
                    fraction of it (60 on a 120 Hz display swaps every second refresh). A software limiter that runs
@@ -2351,6 +2897,11 @@ int main(int argc, char **argv) {
         }
     }
     finish_recording();
+#ifdef PORT_STUDIO
+    /* A search runs in its own processes: it is asked to stop when the studio ends. */
+    studio_stop_search();
+#endif
+    note_window_place();
     menu_shutdown();
     gfx_shutdown();
     SDL_GL_DeleteContext(gl);

@@ -17,6 +17,10 @@ Usage:
                                                     (build/regress/baseline); --exe PATH uses that binary instead
   python3 tools/regress.py check [--rom ROM]        run the current build and compare with the baseline
   options: --runs NAME... (only these runs), --frames N (frames per level run), --exe PATH, --jobs N
+
+The ROM is --rom, or $GLOVER_ROM, or baserom.us.z64 in a gloveworld checkout next to this one. The check fails when a
+run has no baseline, when a run exits with an error, and when --runs names a run that does not exist. Each run starts
+with no save file (--save names a file that does not exist), so the player's own save does not change the result.
 """
 import argparse
 import concurrent.futures
@@ -37,7 +41,7 @@ ATTRACT_FRAMES = 30000
 
 def default_rom():
     """The ROM: $GLOVER_ROM, or baserom.us.z64 in a gloveworld checkout next to this one. From a git worktree, the
-    checkout next to the main working tree counts too."""
+    checkout next to the main working tree counts too. None when there is none."""
     if "GLOVER_ROM" in os.environ:
         return os.environ["GLOVER_ROM"]
     roots = [ROOT]
@@ -49,17 +53,26 @@ def default_rom():
         rom = root.parent / "gloveworld" / "baserom.us.z64"
         if rom.exists():
             return str(rom)
-    return str(ROOT.parent / "gloveworld" / "baserom.us.z64")
+    return None
+
+
+def require_rom(rom, tool):
+    """Stops the tool with one line when the ROM is missing."""
+    if rom is None:
+        sys.exit(f"{tool}: no ROM. Set GLOVER_ROM to the Glover (USA) ROM, or pass --rom FILE.")
+    if not os.path.isfile(rom):
+        sys.exit(f"{tool}: no ROM at {rom}. Set GLOVER_ROM to the Glover (USA) ROM, or pass --rom FILE.")
+    return rom
 
 # N64 buttons.
 A, B, Z, START, L, R = 0x8000, 0x4000, 0x2000, 0x1000, 0x0020, 0x0010
 CUP, CDOWN, CLEFT, CRIGHT = 0x0008, 0x0004, 0x0002, 0x0001
 
 
-def input_script(level, frames):
+def input_script(level, frames, seed=None):
     """Deterministic varied input: walking, running, jumps, the ball buttons, camera buttons, now and then the
-    pause menu (opened and closed again)."""
-    rnd = random.Random(1000 + level)
+    pause menu (opened and closed again). The default seed is 1000 + level."""
+    rnd = random.Random(1000 + level if seed is None else seed)
     lines = []
     f = 30
     while f < frames:
@@ -92,12 +105,20 @@ def runs(frames):
 
 
 def run_one(exe, rom, name, args, frames, dest):
-    cmd = [str(exe), "--rom", rom, "--headless", str(frames), "--trace", "--hash-every", "10", *args]
+    # A save file that does not exist: the run starts with an empty save, whatever the user folder holds. The headless
+    # mode never writes a save.
+    saves = OUT / "saves"
+    saves.mkdir(parents=True, exist_ok=True)
+    save = saves / f"{name}.eeprom"
+    if save.exists():
+        save.unlink()
+    cmd = [str(exe), "--rom", rom, "--headless", str(frames), "--trace", "--hash-every", "10", "--save", str(save),
+           *args]
     if name.startswith("level"):
         script = dest / f"{name}.input"
         script.write_text(input_script(int(name[5:]), frames))
         cmd += ["--input", str(script)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     lines = [l for l in r.stdout.splitlines() if l.startswith("frame ")]
     (dest / f"{name}.trace").write_text("\n".join(lines) + "\n")
     status = "ok" if r.returncode == 0 else f"exit {r.returncode}"
@@ -188,6 +209,13 @@ def main():
     ap.add_argument("--frames", type=int, default=900)
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     args = ap.parse_args()
+    require_rom(args.rom, "regress.py")
+    known = [r[0] for r in runs(args.frames)]
+    unknown = [n for n in args.runs or [] if n not in known]
+    if unknown:
+        sys.exit(f"regress.py: no run named {', '.join(unknown)}. The runs are attract and level00 to level47.")
+    if args.mode == "check" and not (OUT / "baseline").is_dir():
+        sys.exit("regress.py: no baseline in build/regress/baseline. Record it first: python3 tools/regress.py baseline")
     if args.mode == "baseline" and args.exe == str(ROOT / "build" / "headless" / "weemitt"):
         args.exe = build_baseline()
     elif args.exe == str(ROOT / "build" / "headless" / "weemitt"):
@@ -201,20 +229,25 @@ def main():
         results = sorted(f.result() for f in futures)
     for name, status, count in results:
         line = f"{name}: {status}, {count} frames"
+        if status != "ok":
+            failed += 1
         if args.mode == "check":
             if not (OUT / "baseline" / f"{name}.trace").exists():
-                line += "; no baseline"
+                failed += status == "ok"
+                line += "; no baseline (record it with: regress.py baseline)"
             else:
                 d = compare(name, OUT / "baseline", dest)
                 if d:
-                    failed += 1
+                    failed += status == "ok"
                     line += "; " + d
                 else:
                     line += "; same as the baseline"
         print(line)
     if args.mode == "check":
-        print(f"{failed} of {len(results)} runs differ from the baseline")
-        sys.exit(1 if failed else 0)
+        print(f"{failed} of {len(results)} runs failed or differ from the baseline")
+    elif failed:
+        print(f"{failed} of {len(results)} runs failed: the baseline is not complete")
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

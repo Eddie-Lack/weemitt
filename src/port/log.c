@@ -51,8 +51,35 @@ static double elapsed(void) {
     return (double)(now - startCount) / (double)SDL_GetPerformanceFrequency();
 }
 
-/* Stores one line (no end of line) in the file and the ring. The caller holds the lock. */
+/* The last line given to store_line, and how many times in a row it came. The game prints some lines many times
+   over (a texture it does not find, at every frame of the title screen). The file and the ring keep the first two
+   copies and a count. Standard error gets every copy. */
+#define REPEATS_KEPT 2
+static char lastText[LOG_LINE_SIZE];
+static unsigned long lastRepeats;
+
+static void store_raw(const char *text, double t);
+
 static void store_line(const char *text, double t) {
+    if (strncmp(text, lastText, sizeof(lastText) - 1) == 0) {
+        if (++lastRepeats >= REPEATS_KEPT) {
+            return;
+        }
+    } else {
+        if (lastRepeats >= REPEATS_KEPT) {
+            char note[96];
+
+            snprintf(note, sizeof(note), "(the line above came %lu times in a row)", lastRepeats + 1);
+            store_raw(note, t);
+        }
+        snprintf(lastText, sizeof(lastText), "%s", text);
+        lastRepeats = 0;
+    }
+    store_raw(text, t);
+}
+
+/* Stores one line (no end of line) in the file and the ring. The caller holds the lock. */
+static void store_raw(const char *text, double t) {
     char line[LOG_LINE_SIZE];
 
     snprintf(line, sizeof(line), "[%9.3f] %s", t, text);
@@ -117,11 +144,10 @@ void plog_path(char *out, int size) {
         snprintf(out, size, "%s", overridePath);
         return;
     }
+    /* With no preference folder, the log goes to the working folder, as the save and settings.ini do. */
     pref = SDL_GetPrefPath("weemitt", "Glover");
     snprintf(out, size, "%sweemitt.log", pref ? pref : "");
-    if (pref == NULL) {
-        out[0] = 0;
-    } else {
+    if (pref != NULL) {
         SDL_free(pref);
     }
 }

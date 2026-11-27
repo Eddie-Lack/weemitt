@@ -119,9 +119,14 @@ int bcmp(const void *a, const void *b, int n) {
     return memcmp(a, b, n);
 }
 
+int port_log_quiet;
+
 void port_log(const char *fmt, ...) {
     va_list ap;
 
+    if (port_log_quiet) {
+        return;
+    }
     va_start(ap, fmt);
     plog_vprintf(fmt, ap);
     va_end(ap);
@@ -129,17 +134,14 @@ void port_log(const char *fmt, ...) {
 
 /* Set by a host that must not end the process (the library, src/lib/host.c). It does not return. */
 void (*port_fatal_hook)(void);
+char port_fatal_message[900];
 
 void port_fatal(const char *fmt, ...) {
     va_list ap;
 
     va_start(ap, fmt);
-    {
-        char msg[900];
-
-        vsnprintf(msg, sizeof(msg), fmt, ap);
-        plog_printf("fatal: %s", msg);
-    }
+    vsnprintf(port_fatal_message, sizeof(port_fatal_message), fmt, ap);
+    plog_printf("fatal: %s", port_fatal_message);
     va_end(ap);
     if (port_fatal_hook != NULL) {
         port_fatal_hook();
