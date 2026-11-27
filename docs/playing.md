@@ -2,6 +2,13 @@
 
 This page is for players. It says how to start the game, which keys play it, and where your saves go.
 
+## Getting the program
+
+Build it from the source (docs/building.md), or take a build from the
+[Build workflow](https://github.com/Eddie-Lack/weemitt/actions/workflows/build.yml): open the latest green run and
+download `weemitt-linux` or `weemitt-windows` under Artifacts. GitHub asks you to sign in for that. These builds are
+not releases. The Windows build holds `SDL2.dll`: keep it next to `weemitt.exe`.
+
 ## The ROM
 
 weemitt needs your own copy of the Glover (USA) ROM. The game code is NGVE. Other regions do not work.
@@ -47,7 +54,8 @@ Escape opens the menu at the top of the window. While it is open, the keyboard a
 on the game. A controller still works for the game. The game keeps running behind the menu, unless you turn on
 Settings, Graphics, "Pause while the menu is open".
 
-- Settings: Graphics (frame rate, full screen, the picture), Audio and Controls (keys and controller).
+- Settings: Graphics (the physics, the frame rate, full screen, the pause options, the picture), Audio and Controls
+  (keys and controller). Physics, Original (no blending) shows each game frame as the N64 does, with no added delay.
 - Enhancements: easy ball controls, Ballworld, the camera's speed and skipping the intro.
 - Cheats: the game's own cheats, and Go to level.
 - Developer: tools for testing and for finding glitches, and the log.

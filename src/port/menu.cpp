@@ -1245,6 +1245,7 @@ void cheats_window() {
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("In the game's pause menu, R or Z opens a list of all the cheats to switch with A.\n"
+                          "While it is open, the C buttons type no cheat code: B, R or Z closes it.\n"
                           "Off: R and Z do nothing there, as in the original game.");
     }
     ImGui::Separator();

@@ -2435,7 +2435,8 @@ int main(int argc, char **argv) {
     }
     timeBase = SDL_GetPerformanceCounter();
     if (opt.rom == NULL) {
-        die("%s", "No ROM found. Put the Glover (USA) ROM next to the program as glover.z64, or pass --rom FILE.");
+        die("%s", "No ROM found. Put the Glover (USA) ROM (a .z64, .v64 or .n64 file) next to the program or in the "
+                  "folder you start it from, or pass --rom FILE.");
     }
     if (!opt.headlessFrames) {
         plog_printf("weemitt starting, ROM %s", opt.rom);
